@@ -197,3 +197,18 @@ test("page keeps the terminal colors, motion guard, and keyboard viewport", () =
   assert.match(world, /OrbitControls/);
   assert.match(world, /prefers-reduced-motion/);
 });
+
+test("sound toggles, takes on/off and completes its argument", () => {
+  assert.equal(run("sound").sound, true);
+  assert.equal(run("sound", { sound: true }).sound, false);
+  assert.equal(run("sound on", { sound: true }).sound, true);
+  assert.equal(run("sound off").sound, false);
+  assert.equal(run("sound выкл", { sound: true }).sound, false);
+  assert.equal(run("sound loud").sound, null);
+  assert.equal(run("sound loud").blocks[0].t, "err");
+  assert.equal(run("help").sound, null);
+  assert.equal(complete("sound o").input, "sound o");
+  assert.deepEqual(complete("sound o").matches, ["on", "off"]);
+  assert.equal(complete("sound of").input, "sound off ");
+  assert.match(blocksText(run("help").blocks), /sound/);
+});

@@ -21,6 +21,10 @@
   <body>
     <a class="skip" href="#cmd">К командной строке</a>
     <canvas id="webgl"></canvas>
+    <button id="sound-toggle" class="sound-toggle" type="button" aria-pressed="false" aria-label="Звук">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path class="waves" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <span>звук</span> <span class="sound-state">выкл</span>
+    </button>
     <div class="vignette" aria-hidden="true"></div>
     <div id="crt">
       <div class="app">
@@ -53,7 +57,7 @@
       <div class="scan" aria-hidden="true"></div>
       <div class="glare" aria-hidden="true"></div>
     </div>
-    <p id="hint" class="sr">Tab дополняет команды и имена репозиториев. Стрелки листают историю. Тяните стол мышью, колёсико приближает. Клавиши на столе печатают в экран, неоновые вывески открывают проекты, лампа включается щелчком, кота можно разбудить.</p>
+    <p id="hint" class="sr">Tab дополняет команды и имена репозиториев. Стрелки листают историю. Тяните стол мышью, колёсико приближает. Клавиши на столе печатают в экран, неоновые вывески открывают проекты, лампа включается щелчком, кота можно разбудить. Кнопка «звук» или команда sound включает звук.</p>
     <script type="module" src="js/terminal.js"></script>
     <script type="module" src="js/world.js"></script>
   </body>

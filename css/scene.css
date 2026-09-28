@@ -37,8 +37,8 @@ body.has-world .vignette {
 }
 
 #crt.is-crt {
-  width: 980px;
-  height: 660px;
+  width: 1120px;
+  height: 630px;
   background: #071007;
   overflow: hidden;
 }
@@ -53,7 +53,6 @@ body.has-world .vignette {
   left: 0;
 }
 
-#crt.is-crt .scan,
 #crt.is-crt .glare {
   display: block;
 }
@@ -103,4 +102,49 @@ body.has-world:not(.has-crt) .app {
   .vignette {
     background: none;
   }
+}
+
+.sound-toggle {
+  display: none;
+  position: fixed;
+  top: calc(12px + env(safe-area-inset-top));
+  right: calc(12px + env(safe-area-inset-right));
+  z-index: 10;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 40px;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid #314033;
+  border-radius: 999px;
+  background: rgba(4, 8, 10, 0.72);
+  color: var(--dim);
+  font: 0.85rem var(--font);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+
+body.has-world .sound-toggle {
+  display: inline-flex;
+}
+
+.sound-toggle[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sound-toggle .waves {
+  opacity: 0.25;
+}
+
+.sound-toggle[aria-pressed="true"] .waves {
+  opacity: 1;
+}
+
+.sound-toggle:hover {
+  color: var(--fg);
+}
+
+.sound-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }

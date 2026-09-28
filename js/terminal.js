@@ -1,3 +1,4 @@
+import { sound } from "./audio.js";
 import { bootBlocks, complete, createHistory, promptFor, resolveProject, run } from "./engine.js";
 
 const HIST_KEY = "renfild.terminal.history";
@@ -9,6 +10,7 @@ const CHIPS = [
   ["contact", "contact", ""],
   ["clear", "clear", ""],
   ["close", "close", ""],
+  ["sound", "sound", ""],
   ["open aquateche", "open aquateche", "repo"],
   ["open pcai", "open pcai", "repo"],
   ["open tgbotshop", "open tgbotshop", "repo"],
@@ -28,6 +30,7 @@ const selectedEl = document.querySelector("#selected");
 const caretEl = document.querySelector("#caret");
 const ghostEl = document.querySelector("#ghost");
 const app = document.querySelector(".app");
+const soundToggle = document.querySelector("#sound-toggle");
 
 const session = {
   cwd: null,
@@ -38,6 +41,7 @@ let snapshot = null;
 let lastTab = null;
 
 buildChips();
+bindSound();
 bindViewport();
 bindInput();
 output.replaceChildren();
@@ -59,6 +63,14 @@ function buildChips() {
     button.setAttribute("aria-label", command);
     quick.append(button);
   }
+}
+
+function bindSound() {
+  sound.onChange((on) => {
+    soundToggle.setAttribute("aria-pressed", String(on));
+    soundToggle.querySelector(".sound-state").textContent = on ? "вкл" : "выкл";
+  });
+  soundToggle.addEventListener("click", () => sound.toggle());
 }
 
 function bindViewport() {
@@ -260,8 +272,9 @@ function execute(raw, options = {}) {
     persistHistory();
   }
 
-  const result = run(line, { cwd: session.cwd, history: session.history.items });
+  const result = run(line, { cwd: session.cwd, history: session.history.items, sound: sound.enabled });
   session.cwd = result.state.cwd;
+  if (result.sound !== null) sound.set(result.sound);
 
   if (result.clear) {
     snapshot = null;

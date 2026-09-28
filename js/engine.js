@@ -12,6 +12,7 @@ export const PUBLIC_COMMANDS = [
   "cd",
   "pwd",
   "history",
+  "sound",
 ];
 
 const COMMAND_ALIASES = {
@@ -131,6 +132,7 @@ export function complete(input) {
   if (command === "open") pool = projects.map((project) => project.id);
   else if (command === "cd") pool = ["..", "~", ...projects.map((project) => project.id)];
   else if (command === "ls") pool = ["projects"];
+  else if (command === "sound") pool = ["on", "off"];
   if (!pool) return { input: source, matches: [], applied: false };
 
   const matches = pool.filter((item) => item.startsWith(partial));
@@ -168,6 +170,8 @@ export function run(raw, state = {}) {
       return openProject(cwd, parsed.args);
     case "cd":
       return changeDir(cwd, parsed.args);
+    case "sound":
+      return soundCommand(cwd, parsed.args, state.sound === true);
     default:
       return unknown(cwd, parsed);
   }
@@ -227,6 +231,7 @@ function helpBlocks() {
     ["cd <repo>", "то же, что open"],
     ["pwd", "текущий путь"],
     ["history", "прошлые команды"],
+    ["sound", "включить или выключить звук"],
   ];
   const keys = [
     ["↑ ↓", "история ввода"],
@@ -368,6 +373,18 @@ function changeDir(cwd, args) {
   return finish(project.id, caseBlocks(project), { alt: "enter", scroll: "top" });
 }
 
+function soundCommand(cwd, args, current) {
+  if (args.length > 1) return finish(cwd, [{ t: "err", text: "sound: лишние аргументы" }]);
+  const arg = (args[0] ?? "").toLowerCase();
+  let next;
+  if (!arg) next = !current;
+  else if (arg === "on" || arg === "вкл") next = true;
+  else if (arg === "off" || arg === "выкл") next = false;
+  else return finish(cwd, [{ t: "err", text: `sound: не понимаю «${args[0]}». используйте sound on или sound off` }]);
+  const text = next ? "звук включён: дождь, клавиши, лампа и кот" : "звук выключен";
+  return finish(cwd, [{ t: "p", text }], { sound: next });
+}
+
 function runnable(label) {
   if (label.startsWith("open")) return "open";
   if (label.startsWith("cd")) return "cd";
@@ -447,6 +464,7 @@ function finish(cwd, blocks, extra = {}) {
     clear: extra.clear ?? false,
     alt,
     scroll: extra.scroll ?? (alt === "enter" ? "top" : "bottom"),
+    sound: extra.sound ?? null,
   };
 }
 
