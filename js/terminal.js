@@ -109,6 +109,10 @@ function bindInput() {
     execute(button.dataset.cmd);
   });
 
+  document.addEventListener("terminal:command", (event) => {
+    if (typeof event.detail === "string" && event.detail) execute(event.detail);
+  });
+
   app.addEventListener("pointerup", (event) => {
     if (event.target.closest("a, button, input")) return;
     if (window.matchMedia("(pointer: coarse)").matches) return;
