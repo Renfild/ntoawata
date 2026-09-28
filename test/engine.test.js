@@ -186,4 +186,11 @@ test("page keeps the terminal colors, motion guard, and keyboard viewport", () =
   assert.match(css, /prefers-reduced-motion/);
   assert.match(html, /interactive-widget=resizes-content/);
   assert.match(html, /js\/terminal\.js/);
+  assert.match(html, /js\/scene\.js/);
+  assert.match(html, /id="keyboard"/);
+  assert.match(html, /data-cmd="open aquateche"/);
+  assert.match(html, /class="rail"/);
+  const scene = readFileSync(new URL("../css/scene.css", import.meta.url), "utf8");
+  assert.match(scene, /perspective/);
+  assert.match(scene, /prefers-reduced-motion/);
 });
