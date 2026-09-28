@@ -223,9 +223,11 @@ p {
 }
 
 .dock {
-  flex: none;
+  flex: 0 1 auto;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  max-height: 70%;
   border-top: 1px solid var(--line);
   padding: 0.45rem 1rem calc(0.65rem + env(safe-area-inset-bottom));
   background: var(--bg);
@@ -233,22 +235,25 @@ p {
 
 .status {
   order: 1;
+  flex: none;
   margin: 0 0 0.35rem;
   font-size: 0.82rem;
 }
 
 form {
   order: 2;
+  flex: none;
   margin: 0;
 }
 
 .quick {
   order: 3;
   display: flex;
+  flex: 1 1 auto;
   flex-wrap: wrap;
   gap: 0.4rem;
   align-content: flex-start;
-  max-height: 14rem;
+  min-height: 0;
   overflow: auto;
   padding-top: 0.55rem;
   scrollbar-width: thin;
@@ -411,15 +416,6 @@ button:focus-visible,
 .matches {
   margin: 0.35rem 0;
   color: var(--dim);
-}
-
-@media (max-height: 640px) {
-  .quick {
-    flex-wrap: nowrap;
-    max-height: 3.6rem;
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
 }
 
 @media (max-width: 640px) {
