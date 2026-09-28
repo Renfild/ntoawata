@@ -120,12 +120,12 @@ function sendKey(key) {
 
 function bindLook() {
   if (reduceMotion || !window.matchMedia("(min-width: 901px)").matches) return;
-  const baseX = 3;
+  const baseX = 2;
   const baseY = -6;
   window.addEventListener("pointermove", (event) => {
     if (event.pointerType !== "mouse") return;
-    const dx = (event.clientX / window.innerWidth - 0.5) * 10;
-    const dy = (event.clientY / window.innerHeight - 0.5) * -6;
+    const dx = (event.clientX / window.innerWidth - 0.5) * 8;
+    const dy = (event.clientY / window.innerHeight - 0.5) * -4;
     rig.style.transform = `rotateX(${baseX + dy}deg) rotateY(${baseY + dx}deg)`;
   });
 }
