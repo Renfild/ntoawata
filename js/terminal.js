@@ -116,6 +116,11 @@ function bindInput() {
     input.focus({ preventScroll: true });
   });
 
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || event.repeat || event.target === input) return;
+    closeFromEscape();
+  });
+
   window.addEventListener("hashchange", () => {
     const project = projectFromHash();
     if (project && session.cwd !== project.id) {
@@ -165,13 +170,8 @@ function onKeyDown(event) {
     return;
   }
   if (event.key === "Escape") {
-    if (session.cwd) {
-      event.preventDefault();
-      execute("close");
-    } else if (input.value) {
-      input.value = "";
-      paint();
-    }
+    event.preventDefault();
+    closeFromEscape();
     return;
   }
   if (event.ctrlKey && event.key.toLowerCase() === "c") {
@@ -190,6 +190,18 @@ function onKeyDown(event) {
   }
   if (event.ctrlKey && event.key.toLowerCase() === "u") {
     event.preventDefault();
+    input.value = "";
+    lastTab = null;
+    paint();
+  }
+}
+
+function closeFromEscape() {
+  if (session.cwd) {
+    execute("close");
+    return;
+  }
+  if (document.activeElement === input && input.value) {
     input.value = "";
     lastTab = null;
     paint();
