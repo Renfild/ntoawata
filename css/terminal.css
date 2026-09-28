@@ -245,14 +245,23 @@ form {
 .quick {
   order: 3;
   display: flex;
+  flex-wrap: wrap;
   gap: 0.4rem;
-  overflow-x: auto;
+  align-content: flex-start;
+  max-height: 14rem;
+  overflow: auto;
   padding-top: 0.55rem;
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: #314033 transparent;
 }
 
 .quick::-webkit-scrollbar {
-  display: none;
+  width: 8px;
+  height: 8px;
+}
+
+.quick::-webkit-scrollbar-thumb {
+  background: #314033;
 }
 
 .cmdline {
@@ -402,6 +411,15 @@ button:focus-visible,
 .matches {
   margin: 0.35rem 0;
   color: var(--dim);
+}
+
+@media (max-height: 640px) {
+  .quick {
+    flex-wrap: nowrap;
+    max-height: 3.6rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
 }
 
 @media (max-width: 640px) {
