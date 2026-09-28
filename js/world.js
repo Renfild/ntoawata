@@ -59,6 +59,8 @@ const LIMITS = {
   minDistance: 1.4,
   maxDistance: 5.2,
 };
+// Inner faces of the room's side walls, ceiling and open back edge.
+const ROOM = { left: -3.7, right: 3.7, floor: -0.9, ceiling: 4.6, back: 6 };
 const FREE = {
   minAzimuthAngle: -Infinity,
   maxAzimuthAngle: Infinity,
@@ -318,6 +320,7 @@ function boot() {
       view.free = false;
     }
     controls.update();
+    if (!view.free) keepInsideRoom(camera.position);
     for (const tick of tickers) tick(dt, elapsed);
     // CSS3D surfaces do not depth-sort against each other reliably, so a close-up shows only its own.
     if (crtObject) placeSurface(crtObject, surfaces.screen, view.focus !== "phone");
@@ -508,6 +511,15 @@ function tapKey(mesh) {
   }, 110);
 }
 
+// Orbit limits alone let a zoomed-out camera at the edge of its arc slip through a side wall and
+// see only the wall's dark outside; hold it a little inside the room instead.
+function keepInsideRoom(position) {
+  const pad = 0.3;
+  position.x = Math.min(ROOM.right - pad, Math.max(ROOM.left + pad, position.x));
+  position.y = Math.min(ROOM.ceiling - pad, position.y);
+  position.z = Math.min(ROOM.back - pad, position.z);
+}
+
 function stepCamera(anim, camera, controls, dt) {
   if (anim.t >= 1) return;
   anim.t = Math.min(1, anim.t + dt / anim.duration);
@@ -673,7 +685,7 @@ function addRoom(scene) {
   const z = -1.95;
   const t = 0.2;
   const open = { left: -3.1, right: 3.1, bottom: 0.35, top: 3.85 };
-  const room = { left: -3.7, right: 3.7, floor: -0.9, ceiling: 4.6, back: 6 };
+  const room = ROOM;
   const pieces = [
     [9, 9, open.left - 4.5, 1.5],
     [9, 9, open.right + 4.5, 1.5],
