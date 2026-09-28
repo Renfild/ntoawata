@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#0c0f0c" />
+    <meta name="description" content="Терминал Renfild: портфолио по публичным репозиториям GitHub." />
+    <title>Renfild — терминал</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect fill='%230c0f0c' width='16' height='16'/%3E%3Crect fill='%237CFF6B' x='2' y='3' width='8' height='10'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="css/terminal.css" />
+  </head>
+  <body>
+    <a class="skip" href="#cmd">К командной строке</a>
+    <div class="app">
+      <header class="top">
+        <div class="top-inner">
+          <h1 class="brand"><span class="accent">renfild</span><span class="dim">@github</span></h1>
+          <a href="https://github.com/Renfild">github.com/Renfild</a>
+        </div>
+      </header>
+      <div class="frame">
+        <div id="output" class="output" role="log" aria-label="Вывод терминала">
+          <noscript><p class="p">Нужен JavaScript: терминал выполняется в браузере.</p></noscript>
+        </div>
+        <div class="dock">
+          <p id="status" class="status"></p>
+          <div id="quick" class="quick" role="group" aria-label="Команды"></div>
+          <form id="form">
+            <div class="cmdline">
+              <label class="sr" for="cmd">Команда</label>
+              <span id="prompt" class="prompt" aria-hidden="true"></span>
+              <span id="field" class="field">
+                <span class="mirror" aria-hidden="true"><span id="before"></span><span id="selected" class="selected" hidden></span><span id="caret" class="caret"></span><span id="ghost" class="ghost"></span><span id="after"></span></span>
+                <input id="cmd" name="terminal-command" aria-describedby="hint" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="go" maxlength="240" />
+              </span>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+    <p id="hint" class="sr">Tab дополняет команды и имена репозиториев. Стрелки листают историю. Shift+Tab переходит к кнопкам и ссылкам.</p>
+    <script type="module" src="js/terminal.js"></script>
+  </body>
+</html>
