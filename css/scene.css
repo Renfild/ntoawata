@@ -104,12 +104,21 @@ body.has-world:not(.has-crt) .app {
   }
 }
 
-.sound-toggle {
+.corner {
   display: none;
   position: fixed;
   top: calc(12px + env(safe-area-inset-top));
   right: calc(12px + env(safe-area-inset-right));
   z-index: 10;
+  gap: 0.5rem;
+}
+
+body.has-world .corner {
+  display: flex;
+}
+
+.pill {
+  display: inline-flex;
   align-items: center;
   gap: 0.4rem;
   min-height: 40px;
@@ -123,13 +132,26 @@ body.has-world:not(.has-crt) .app {
   backdrop-filter: blur(6px);
 }
 
-body.has-world .sound-toggle {
-  display: inline-flex;
-}
-
-.sound-toggle[aria-pressed="true"] {
+.pill[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.pill:hover {
+  color: var(--fg);
+}
+
+.pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.zoom-toggle {
+  display: none;
+}
+
+body.has-crt .zoom-toggle {
+  display: inline-flex;
 }
 
 .sound-toggle .waves {
@@ -138,13 +160,4 @@ body.has-world .sound-toggle {
 
 .sound-toggle[aria-pressed="true"] .waves {
   opacity: 1;
-}
-
-.sound-toggle:hover {
-  color: var(--fg);
-}
-
-.sound-toggle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
 }

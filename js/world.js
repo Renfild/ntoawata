@@ -10,7 +10,7 @@ import { sound } from "./audio.js";
 
 const CRT_W = 1120;
 const CRT_H = 630;
-const SCALE = 0.0017;
+const SCALE = 0.0019;
 const SCREEN_W = CRT_W * SCALE;
 const SCREEN_H = CRT_H * SCALE;
 
@@ -39,9 +39,26 @@ const input = document.querySelector("#cmd");
 const form = document.querySelector("#form");
 
 const HERO = desktop
-  ? { pos: [1.75, 1.85, 3.1], target: [0.02, 1.25, 0.05] }
+  ? { pos: [2.0, 2.3, 4.3], target: [0.05, 0.9, 0.45] }
   : { pos: [1.7, 2.35, 3.2], target: [0, 1.45, 0.1] };
-const ARRIVE = { pos: [2.3, 2.1, 3.7], target: [0.1, 1.4, -0.1] };
+const ARRIVE = { pos: [2.9, 2.9, 5.3], target: [0.1, 1.3, -0.2] };
+// The room is only built towards the window: keep the free camera in the arc that shows it.
+const LIMITS = {
+  minAzimuthAngle: -0.55,
+  maxAzimuthAngle: 0.95,
+  minPolarAngle: 1.0,
+  maxPolarAngle: 1.52,
+  minDistance: 1.4,
+  maxDistance: 5.2,
+};
+const FREE = {
+  minAzimuthAngle: -Infinity,
+  maxAzimuthAngle: Infinity,
+  minPolarAngle: 0,
+  maxPolarAngle: Math.PI,
+  minDistance: 0.05,
+  maxDistance: Infinity,
+};
 
 const digits = [..."1234567890"].map((d) => [`Digit${d}`, d, 1, d]);
 const letters = (row) => [...row].map((c) => [`Key${c.toUpperCase()}`, c, 1, c]);
@@ -109,14 +126,9 @@ function boot() {
   controls.enableDamping = !reduceMotion;
   controls.dampingFactor = 0.08;
   controls.target.set(...(intro ? ARRIVE.target : HERO.target));
-  // The room is only built towards the window: keep the camera in the arc that shows it.
   controls.enablePan = false;
-  controls.minAzimuthAngle = -0.55;
-  controls.maxAzimuthAngle = 0.95;
-  controls.minPolarAngle = 1.0;
-  controls.maxPolarAngle = 1.52;
-  controls.minDistance = 1.4;
-  controls.maxDistance = 4.6;
+  // Scripted flights (intro, zoom) pass outside the limits, so they are lifted until the flight lands.
+  Object.assign(controls, intro ? FREE : LIMITS);
   controls.update();
 
   const composer = new EffectComposer(renderer);
@@ -158,11 +170,15 @@ function boot() {
   let pointer = null;
   let hovered = null;
 
+  const view = { zoomed: false, free: intro };
+  const zoomButton = document.querySelector("#zoom-toggle");
+
   controls.addEventListener("start", () => {
     anim.t = 1;
   });
   bindPicking(canvas, camera, pickables);
   bindPhysicalKeys();
+  bindZoom();
 
   window.addEventListener("resize", () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -170,13 +186,93 @@ function boot() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
     cssRenderer?.setSize(window.innerWidth, window.innerHeight);
+    if (view.zoomed) {
+      const pose = zoomPose();
+      camera.position.copy(pose.pos);
+      controls.target.copy(pose.target);
+      anim.t = 1;
+    }
   });
+
+  function flyTo(pos, target, duration) {
+    anim.from.copy(camera.position);
+    anim.targetFrom.copy(controls.target);
+    anim.to.copy(pos);
+    anim.targetTo.copy(target);
+    anim.duration = reduceMotion ? 0.001 : duration;
+    anim.t = 0;
+    Object.assign(controls, FREE);
+    view.free = true;
+  }
+
+  // Straight in front of the screen, far enough back that the glass fills the view with a thin margin.
+  function zoomPose() {
+    screenAnchor.updateWorldMatrix(true, false);
+    const target = new THREE.Vector3().setFromMatrixPosition(screenAnchor.matrixWorld);
+    const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(screenAnchor.getWorldQuaternion(new THREE.Quaternion()));
+    const tanHalf = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    const fitH = (SCREEN_H * 1.08) / 2 / tanHalf;
+    const fitW = (SCREEN_W * 1.05) / 2 / (tanHalf * camera.aspect);
+    return { pos: target.clone().addScaledVector(normal, Math.max(fitH, fitW)), target };
+  }
+
+  function setZoom(on) {
+    if (!crtObject || on === view.zoomed) return;
+    view.zoomed = on;
+    controls.enabled = !on;
+    if (on) {
+      const pose = zoomPose();
+      flyTo(pose.pos, pose.target, 1.1);
+    } else {
+      flyTo(new THREE.Vector3(...HERO.pos), new THREE.Vector3(...HERO.target), 1.1);
+    }
+    document.body.classList.toggle("is-zoomed", on);
+    document.dispatchEvent(new CustomEvent("desk:zoomed", { detail: on }));
+    if (zoomButton) {
+      zoomButton.setAttribute("aria-pressed", String(on));
+      zoomButton.querySelector(".zoom-label").textContent = on ? "Esc — отдалить" : "приблизить экран";
+    }
+    focusTerminal();
+  }
+
+  function bindZoom() {
+    if (!desktop) return;
+    document.addEventListener("desk:zoom", (event) => setZoom(event.detail !== false));
+    zoomButton?.addEventListener("click", () => setZoom(!view.zoomed));
+    // Capture phase, ahead of the terminal: while zoomed, Esc only pulls the camera back.
+    window.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.key !== "Escape" || !view.zoomed) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setZoom(false);
+      },
+      true,
+    );
+    let press = null;
+    crt.addEventListener("pointerdown", (event) => {
+      press = { x: event.clientX, y: event.clientY };
+    });
+    crt.addEventListener("pointerup", (event) => {
+      if (!press || view.zoomed) return;
+      const moved = Math.hypot(event.clientX - press.x, event.clientY - press.y) > 5;
+      press = null;
+      if (moved || event.target.closest("a, button")) return;
+      if (window.getSelection()?.toString()) return;
+      setZoom(true);
+    });
+  }
 
   renderer.setAnimationLoop(() => {
     // Clamp so a backgrounded tab does not teleport cars and rain when it resumes.
     const dt = Math.min(clock.getDelta(), 0.1);
     const elapsed = clock.elapsedTime;
     stepCamera(anim, camera, controls, dt);
+    if (view.free && anim.t >= 1 && !view.zoomed) {
+      Object.assign(controls, LIMITS);
+      view.free = false;
+    }
     controls.update();
     for (const tick of tickers) tick(dt, elapsed);
     if (crtObject) {
@@ -601,11 +697,13 @@ function addMac(scene, pickables) {
   group.position.set(0, 0, 0.02);
   scene.add(group);
 
-  const W = 2.1;
-  const H = 1.5;
+  // Body proportions follow the screen, so a larger SCALE grows the whole computer.
+  const k = SCALE / 0.0017;
+  const W = 2.1 * k;
+  const H = 1.5 * k;
   const D = 0.05;
   const bottom = 0.44;
-  const chinH = 0.3;
+  const chinH = 0.3 * k;
   const cy = bottom + H / 2;
 
   const back = new THREE.MeshStandardMaterial({ color: 0x4f78b0, roughness: 0.32, metalness: 0.65 });
@@ -667,17 +765,14 @@ function addMac(scene, pickables) {
     new THREE.PlaneGeometry(0.2, 0.2),
     new THREE.MeshStandardMaterial({ map: appleTexture(), transparent: true, roughness: 0.2, metalness: 0.9, color: 0x6d8fc0 }),
   );
-  logo.position.set(0, cy + 0.2, -D / 2 - 0.0015);
+  logo.position.set(0, cy + 0.2 * k, -D / 2 - 0.0015);
   logo.rotation.y = Math.PI;
   group.add(logo);
 
-  const hit = new THREE.Mesh(
-    new THREE.PlaneGeometry(W, chinH),
-    new THREE.MeshBasicMaterial({ visible: false }),
-  );
-  hit.position.copy(chinPlate.position);
-  hit.position.z += 0.002;
-  hit.userData.onPick = () => sound.sign();
+  // The CSS3D screen takes clicks on the glass; this catches the bezel and chin around it.
+  const hit = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ visible: false }));
+  hit.position.set(0, cy, front + 0.001);
+  hit.userData.onPick = () => document.dispatchEvent(new CustomEvent("desk:zoom", { detail: true }));
   group.add(hit);
   pickables.push(hit);
 

@@ -38,6 +38,7 @@ const session = {
 };
 
 let snapshot = null;
+let zoomed = false;
 let lastTab = null;
 
 buildChips();
@@ -119,6 +120,11 @@ function bindInput() {
     const button = event.target.closest("[data-cmd]");
     if (!button) return;
     execute(button.dataset.cmd);
+  });
+
+  document.addEventListener("desk:zoomed", (event) => {
+    zoomed = event.detail === true;
+    updateChrome();
   });
 
   document.addEventListener("terminal:command", (event) => {
@@ -389,7 +395,8 @@ function appendEcho(cwd, command) {
 
 function updateChrome() {
   promptEl.textContent = promptFor(session.cwd);
-  statusEl.textContent = session.cwd ? `${promptPath(session.cwd)}  ·  Esc закрывает кейс` : "~  ·  help — список команд";
+  const esc = zoomed ? "Esc отдаляет экран" : session.cwd ? "Esc закрывает кейс" : "help — список команд";
+  statusEl.textContent = `${session.cwd ? promptPath(session.cwd) : "~"}  ·  ${esc}`;
   document.title = session.cwd ? `${session.cwd} — Renfild` : "Renfild — терминал";
 }
 
