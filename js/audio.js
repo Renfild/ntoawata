@@ -226,12 +226,13 @@ function sign() {
   buzz.stop(t + 0.35);
 }
 
-function mouse() {
+// A crisp click on press and a softer, higher tick on release.
+function mouse(up = false) {
   if (!live()) return;
   const t = ctx.currentTime;
   const src = ctx.createBufferSource();
   src.buffer = noise;
-  src.connect(filter("bandpass", 4200, 2.5)).connect(envelope(t, 0.3, 0.0008, 0.02)).connect(master);
+  src.connect(filter("bandpass", up ? 5200 : 4200, 2.5)).connect(envelope(t, up ? 0.12 : 0.3, 0.0008, 0.02)).connect(master);
   src.start(t, Math.random() * 2, 0.03);
 }
 

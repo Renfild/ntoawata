@@ -1042,12 +1042,17 @@ function addMouse(scene, pickables) {
   }
   geo.computeVertexNormals();
   weldNormals(geo);
+  // The top shell rocks on a pivot at its back edge, like a real button press.
+  const clicker = new THREE.Group();
+  clicker.position.z = 0.22;
+  group.add(clicker);
   const shell = new THREE.Mesh(
     geo,
     new THREE.MeshPhysicalMaterial({ color: 0xf4f6f8, roughness: 0.18, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08 }),
   );
+  shell.position.z = -0.22;
   shell.castShadow = true;
-  group.add(shell);
+  clicker.add(shell);
 
   const base = new THREE.Mesh(
     ellipsoid(0.137, 0.016, 0.252, 48, 12),
@@ -1060,21 +1065,63 @@ function addMouse(scene, pickables) {
     new THREE.BoxGeometry(0.003, 0.004, 0.14),
     new THREE.MeshBasicMaterial({ color: 0xc9cdd2 }),
   );
-  seam.position.set(0, 0.042, -0.13);
+  seam.position.set(0, 0.042, -0.35);
   seam.rotation.x = -0.2;
-  group.add(seam);
+  clicker.add(seam);
 
   const hit = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.08, 0.5), new THREE.MeshBasicMaterial({ visible: false }));
   hit.position.y = 0.04;
-  hit.userData.onPick = () => {
-    sound.mouse();
-    shell.position.y = -0.004;
-    window.setTimeout(() => {
-      shell.position.y = 0;
-    }, 90);
-  };
+  // The press itself comes from the window listener below; picking only keeps the pointer cursor.
+  hit.userData.onPick = () => {};
   group.add(hit);
   pickables.push(hit);
+
+  // Mirror the visitor's real mouse: buttons rock the shell, movement slides it around the mat.
+  const home = group.position.clone();
+  const state = { left: false, right: false, nx: 0, ny: 0, tiltX: 0, tiltZ: 0 };
+  window.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (event.pointerType !== "mouse") return;
+      if (event.button === 0) state.left = true;
+      else if (event.button === 2) state.right = true;
+      else return;
+      sound.mouse(false);
+    },
+    true,
+  );
+  const release = (event) => {
+    if (event.pointerType && event.pointerType !== "mouse") return;
+    if (!state.left && !state.right) return;
+    state.left = false;
+    state.right = false;
+    sound.mouse(true);
+  };
+  window.addEventListener("pointerup", release, true);
+  window.addEventListener("blur", release);
+  // A context menu can swallow the right button's pointerup.
+  window.addEventListener("contextmenu", () => window.setTimeout(() => release({}), 160));
+  window.addEventListener(
+    "pointermove",
+    (event) => {
+      if (event.pointerType !== "mouse") return;
+      state.nx = (event.clientX / window.innerWidth) * 2 - 1;
+      state.ny = (event.clientY / window.innerHeight) * 2 - 1;
+    },
+    true,
+  );
+  tickers.push((dt) => {
+    const k = reduceMotion ? 1 : Math.min(1, dt * 30);
+    const down = state.left || state.right;
+    const goalX = down ? -0.05 : 0;
+    const goalZ = state.left && !state.right ? 0.035 : state.right && !state.left ? -0.035 : 0;
+    state.tiltX += (goalX - state.tiltX) * k;
+    state.tiltZ += (goalZ - state.tiltZ) * k;
+    clicker.rotation.set(state.tiltX, 0, state.tiltZ);
+    const slide = Math.min(1, dt * 6) * motion;
+    group.position.x += (home.x + state.nx * 0.1 - group.position.x) * slide;
+    group.position.z += (home.z + state.ny * 0.07 - group.position.z) * slide;
+  });
 }
 
 function addCable(scene) {
