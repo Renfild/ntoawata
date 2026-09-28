@@ -38,9 +38,13 @@ const crt = document.querySelector("#crt");
 const input = document.querySelector("#cmd");
 const form = document.querySelector("#form");
 
-const HERO = desktop
-  ? { pos: [2.0, 2.3, 4.3], target: [0.05, 0.9, 0.45] }
-  : { pos: [1.7, 2.35, 3.2], target: [0, 1.45, 0.1] };
+const wideQuery = window.matchMedia("(min-width: 900px)");
+// Opening shot per layout: wide windows put the terminal on the monitor, narrow ones dock it below the scene.
+const HEROES = {
+  wide: { pos: [2.0, 2.3, 4.3], target: [0.05, 0.9, 0.45] },
+  narrow: { pos: [1.8, 2.35, 4.1], target: [0.1, 1.2, 0.3] },
+};
+let HERO = desktop ? HEROES.wide : HEROES.narrow;
 const ARRIVE = { pos: [2.9, 2.9, 5.3], target: [0.1, 1.3, -0.2] };
 // The room is only built towards the window: keep the free camera in the arc that shows it.
 const LIMITS = {
@@ -148,7 +152,9 @@ function boot() {
   let cssRenderer = null;
   let crtObject = null;
   let screenPlaced = false;
+  const hintEl = document.querySelector("#hint");
   if (desktop) mountScreen(screenAnchor);
+  frameLayout(desktop);
   document.body.classList.add("has-world");
 
   const clock = new THREE.Clock();
@@ -186,6 +192,7 @@ function boot() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
     cssRenderer?.setSize(window.innerWidth, window.innerHeight);
+    frameLayout(wideQuery.matches);
     if (view.zoomed) {
       const pose = zoomPose();
       camera.position.copy(pose.pos);
@@ -236,7 +243,6 @@ function boot() {
   }
 
   function bindZoom() {
-    if (!desktop) return;
     document.addEventListener("desk:zoom", (event) => setZoom(event.detail !== false));
     zoomButton?.addEventListener("click", () => setZoom(!view.zoomed));
     // Capture phase, ahead of the terminal: while zoomed, Esc only pulls the camera back.
@@ -255,7 +261,7 @@ function boot() {
       press = { x: event.clientX, y: event.clientY };
     });
     crt.addEventListener("pointerup", (event) => {
-      if (!press || view.zoomed) return;
+      if (!press || view.zoomed || !crtObject) return;
       const moved = Math.hypot(event.clientX - press.x, event.clientY - press.y) > 5;
       press = null;
       if (moved || event.target.closest("a, button")) return;
@@ -308,14 +314,54 @@ function boot() {
     return frustum.setFromProjectionMatrix(viewProj).intersectsBox(screenBox);
   }
 
+  // The layout follows the window width live: an artifact panel or a browser window can be
+  // opened narrow and widened later, and the terminal has to move onto the monitor then.
+  wideQuery.addEventListener("change", (event) => {
+    if (event.matches) mountScreen(screenAnchor);
+    else unmountScreen();
+    frameLayout(event.matches);
+    HERO = event.matches ? HEROES.wide : HEROES.narrow;
+    flyTo(new THREE.Vector3(...HERO.pos), new THREE.Vector3(...HERO.target), 0.9);
+  });
+
+  // Narrow layout docks the terminal over the lower 68% of the page. Shift the projection so the
+  // desk sits in the middle of the strip left above it, and widen the lens so the whole desk fits.
+  function frameLayout(isWide) {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    camera.fov = isWide ? 38 : 68;
+    if (isWide || h <= 520) camera.clearViewOffset();
+    else camera.setViewOffset(w, h, 0, h * 0.34, w, h);
+    camera.updateProjectionMatrix();
+  }
+
+  function unmountScreen() {
+    if (!crtObject) return;
+    if (view.zoomed) setZoom(false);
+    // Removing the object also detaches #crt from the CSS3D layer; put it back in the page flow.
+    cssRenderer.userData.scene.remove(crtObject);
+    crtObject = null;
+    crt.removeAttribute("style");
+    crt.classList.remove("is-crt");
+    document.body.classList.remove("has-crt");
+    document.body.insertBefore(crt, hintEl);
+    cssRenderer.domElement.style.display = "none";
+    focusTerminal();
+  }
+
   function mountScreen(anchor) {
-    cssRenderer = new CSS3DRenderer();
-    cssRenderer.setSize(window.innerWidth, window.innerHeight);
-    cssRenderer.domElement.className = "css3d";
-    cssRenderer.domElement.style.pointerEvents = "none";
-    document.body.append(cssRenderer.domElement);
-    const cssScene = new THREE.Scene();
-    cssRenderer.userData = { scene: cssScene };
+    if (crtObject) return;
+    if (!cssRenderer) {
+      cssRenderer = new CSS3DRenderer();
+      cssRenderer.setSize(window.innerWidth, window.innerHeight);
+      cssRenderer.domElement.className = "css3d";
+      cssRenderer.domElement.style.pointerEvents = "none";
+      document.body.append(cssRenderer.domElement);
+      cssRenderer.userData = { scene: new THREE.Scene() };
+    }
+    cssRenderer.domElement.style.display = "";
+    const cssScene = cssRenderer.userData.scene;
+    screenPlaced = false;
     crt.classList.add("is-crt");
     document.body.classList.add("has-crt");
     crt.style.userSelect = "text";
@@ -729,7 +775,15 @@ function addMac(scene, pickables) {
   const screenY = bottom + chinH + 0.012 + bezelH / 2;
   const glass = new THREE.Mesh(
     new THREE.PlaneGeometry(SCREEN_W + 0.02, SCREEN_H + 0.02),
-    new THREE.MeshStandardMaterial({ color: 0x020604, emissive: 0x0b2414, emissiveIntensity: 0.6, roughness: 0.15, metalness: 0.2 }),
+    // What the glass shows when the live terminal is docked below the scene instead of mapped onto it.
+    new THREE.MeshStandardMaterial({
+      color: 0x020604,
+      emissive: 0xffffff,
+      emissiveMap: idleScreenTexture(),
+      emissiveIntensity: 0.85,
+      roughness: 0.45,
+      metalness: 0.1,
+    }),
   );
   glass.position.set(0, screenY, front + 0.001);
   group.add(glass);
@@ -781,6 +835,37 @@ function addMac(scene, pickables) {
   anchor.scale.setScalar(SCALE);
   group.add(anchor);
   return anchor;
+}
+
+function idleScreenTexture() {
+  const c = document.createElement("canvas");
+  c.width = 1120;
+  c.height = 630;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#050a06";
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.font = "600 30px ui-monospace, monospace";
+  ctx.textBaseline = "top";
+  const lines = [
+    ["#7CFF6B", "renfild@github"],
+    ["", ""],
+    ["#7CFF6B", "Renfild — личный терминал"],
+    ["#b9c4ad", "Python, Telegram-боты, RAG, Minecraft, OpenCV"],
+    ["", ""],
+    ["#7CFF6B", "renfild@github:~$ ls projects"],
+    ["#d7e0c8", "aquateche   pcai   tgbotshop"],
+    ["#d7e0c8", "tamagotchi-bot   fisherman"],
+    ["", ""],
+    ["#7CFF6B", "renfild@github:~$ █"],
+  ];
+  lines.forEach(([color, text], i) => {
+    ctx.fillStyle = color || "#000";
+    ctx.fillText(text, 70, 60 + i * 50);
+  });
+  const map = new THREE.CanvasTexture(c);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = maxAniso;
+  return map;
 }
 
 function appleTexture() {
