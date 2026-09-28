@@ -1,0 +1,269 @@
+body {
+  background: #02060c;
+}
+
+#webgl {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  display: none;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+body.has-world #webgl {
+  display: block;
+}
+
+.css3d {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+}
+
+.vignette {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 44%, transparent 56%, rgba(1, 4, 10, 0.62) 100%);
+}
+
+body.has-world .vignette {
+  display: block;
+}
+
+#crt.is-crt {
+  width: 1120px;
+  height: 630px;
+  background: #071007;
+  overflow: hidden;
+}
+
+#crt.is-crt .app {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  top: 0;
+  right: 0;
+  left: 0;
+}
+
+#crt.is-crt .glare {
+  display: block;
+}
+
+.scan,
+.glare {
+  display: none;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.scan {
+  background: repeating-linear-gradient(transparent 0 3px, rgba(0, 0, 0, 0.16) 3px 4px);
+  z-index: 3;
+}
+
+.glare {
+  background: linear-gradient(115deg, rgba(255, 255, 255, 0.08), transparent 32%);
+  z-index: 3;
+}
+
+body.has-world:not(.has-crt) .app {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: calc(var(--app-top) + var(--app-height) * 0.32);
+  height: calc(var(--app-height) * 0.68);
+  bottom: auto;
+  z-index: 4;
+}
+
+@media (max-width: 900px) {
+  .vignette {
+    background: radial-gradient(ellipse at 50% 28%, transparent 36%, rgba(1, 4, 10, 0.42) 100%);
+  }
+}
+
+@media (max-height: 520px) {
+  body.has-world:not(.has-crt) .app {
+    top: var(--app-top);
+    height: var(--app-height);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vignette {
+    background: none;
+  }
+}
+
+.corner {
+  display: none;
+  position: fixed;
+  top: calc(12px + env(safe-area-inset-top));
+  right: calc(12px + env(safe-area-inset-right));
+  z-index: 10;
+  gap: 0.5rem;
+}
+
+body.has-world .corner {
+  display: flex;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 40px;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid #314033;
+  border-radius: 999px;
+  background: rgba(4, 8, 10, 0.72);
+  color: var(--dim);
+  font: 0.85rem var(--font);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+
+.pill[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.pill:hover {
+  color: var(--fg);
+}
+
+.pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.zoom-toggle {
+  display: none;
+}
+
+body.has-crt .zoom-toggle {
+  display: inline-flex;
+}
+
+.sound-toggle .waves {
+  opacity: 0.25;
+}
+
+.sound-toggle[aria-pressed="true"] .waves {
+  opacity: 1;
+}
+
+.boot {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  display: grid;
+  place-items: center;
+  background: #000;
+  color: #7cff6b;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: opacity 0.4s ease;
+}
+
+#crt.is-crt .boot {
+  position: absolute;
+}
+
+.boot.is-done {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.boot-power {
+  display: grid;
+  justify-items: center;
+  gap: 0.6rem;
+  color: var(--dim);
+  text-align: center;
+}
+
+.boot-power svg {
+  color: #7cff6b;
+  filter: drop-shadow(0 0 12px rgba(124, 255, 107, 0.7));
+  animation: boot-pulse 1.6s ease-in-out infinite;
+}
+
+.boot-power p {
+  color: var(--fg);
+  font-size: 1.05rem;
+}
+
+.boot-screen {
+  display: none;
+  width: min(760px, 86%);
+  cursor: default;
+}
+
+.boot.is-booting .boot-power {
+  display: none;
+}
+
+.boot.is-booting .boot-screen {
+  display: block;
+}
+
+.boot-log {
+  min-height: 15.5em;
+  white-space: pre-wrap;
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: var(--fg);
+}
+
+.boot-ok {
+  color: #7cff6b;
+}
+
+.boot-bar {
+  height: 6px;
+  margin: 1.2rem 0 0.6rem;
+  border-radius: 3px;
+  background: #1a2a1c;
+  overflow: hidden;
+}
+
+.boot-fill {
+  width: 0;
+  height: 100%;
+  background: #7cff6b;
+  box-shadow: 0 0 12px #7cff6b;
+  transition: width 0.2s ease;
+}
+
+.boot-skip {
+  color: var(--dim);
+}
+
+@keyframes boot-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.94);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-power svg {
+    animation: none;
+  }
+}
