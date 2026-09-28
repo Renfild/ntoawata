@@ -83,11 +83,11 @@ function ambience() {
   const rain = loopNoise();
   const high = filter("highpass", 500, 0.5);
   const low = filter("lowpass", 7000, 0.5);
-  const rainGain = gain(0.06);
+  const rainGain = gain(0.035);
   rain.connect(high).connect(low).connect(rainGain).connect(master);
   const swell = ctx.createOscillator();
   swell.frequency.value = 0.07;
-  const swellDepth = gain(0.02);
+  const swellDepth = gain(0.012);
   swell.connect(swellDepth).connect(rainGain.gain);
   swell.start();
 
@@ -118,7 +118,7 @@ function drip() {
   const f = 1400 + Math.random() * 1800;
   osc.frequency.setValueAtTime(f, t);
   osc.frequency.exponentialRampToValueAtTime(f * 0.55, t + 0.05);
-  const g = envelope(t, 0.012 + Math.random() * 0.012, 0.001, 0.06);
+  const g = envelope(t, 0.007 + Math.random() * 0.007, 0.001, 0.06);
   osc.connect(g).connect(master);
   osc.start(t);
   osc.stop(t + 0.08);
