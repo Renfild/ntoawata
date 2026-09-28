@@ -161,3 +161,109 @@ body.has-crt .zoom-toggle {
 .sound-toggle[aria-pressed="true"] .waves {
   opacity: 1;
 }
+
+.boot {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  display: grid;
+  place-items: center;
+  background: #000;
+  color: #7cff6b;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: opacity 0.4s ease;
+}
+
+#crt.is-crt .boot {
+  position: absolute;
+}
+
+.boot.is-done {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.boot-power {
+  display: grid;
+  justify-items: center;
+  gap: 0.6rem;
+  color: var(--dim);
+  text-align: center;
+}
+
+.boot-power svg {
+  color: #7cff6b;
+  filter: drop-shadow(0 0 12px rgba(124, 255, 107, 0.7));
+  animation: boot-pulse 1.6s ease-in-out infinite;
+}
+
+.boot-power p {
+  color: var(--fg);
+  font-size: 1.05rem;
+}
+
+.boot-screen {
+  display: none;
+  width: min(760px, 86%);
+  cursor: default;
+}
+
+.boot.is-booting .boot-power {
+  display: none;
+}
+
+.boot.is-booting .boot-screen {
+  display: block;
+}
+
+.boot-log {
+  min-height: 15.5em;
+  white-space: pre-wrap;
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: var(--fg);
+}
+
+.boot-ok {
+  color: #7cff6b;
+}
+
+.boot-bar {
+  height: 6px;
+  margin: 1.2rem 0 0.6rem;
+  border-radius: 3px;
+  background: #1a2a1c;
+  overflow: hidden;
+}
+
+.boot-fill {
+  width: 0;
+  height: 100%;
+  background: #7cff6b;
+  box-shadow: 0 0 12px #7cff6b;
+  transition: width 0.2s ease;
+}
+
+.boot-skip {
+  color: var(--dim);
+}
+
+@keyframes boot-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.94);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-power svg {
+    animation: none;
+  }
+}

@@ -212,3 +212,28 @@ test("sound toggles, takes on/off and completes its argument", () => {
   assert.equal(complete("sound of").input, "sound off ");
   assert.match(blocksText(run("help").blocks), /sound/);
 });
+
+test("the desk cat keeps real-time needs and links its project", async () => {
+  const { createPet, settle } = await import("../js/pet.js");
+  const start = createPet(0);
+  assert.equal(settle(start, 90_000).food, start.food - 1);
+  const fed = run("feed", { pet: { food: 40, joy: 40, at: 0 }, now: 0 });
+  assert.equal(fed.pet.food, 75);
+  assert.equal(fed.petAction, "feed");
+  assert.match(blocksText(fed.blocks), /tamagotchi-bot/);
+  const full = run("feed", { pet: { food: 99, joy: 40, at: 0 }, now: 0 });
+  assert.equal(full.petAction, "status");
+  assert.equal(full.pet.food, 99);
+  assert.equal(run("play", { pet: { food: 5, joy: 10, at: 0 }, now: 0 }).petAction, "status");
+  assert.equal(run("pet", { pet: { food: 50, joy: 90, at: 0 }, now: 0 }).pet.joy, 100);
+  assert.match(blocksText(run("cat", { now: 0 }).blocks), /сытость/);
+  assert.equal(run("cat notes.txt").blocks[0].t, "err");
+  assert.equal(run("tamagotchi", { now: 0 }).petAction, "status");
+  assert.equal(run("help").pet, null);
+});
+
+test("shop opens the phone demo", () => {
+  assert.equal(run("shop").shop, true);
+  assert.equal(run("help").shop, false);
+  assert.equal(run("shop now").blocks[0].t, "err");
+});

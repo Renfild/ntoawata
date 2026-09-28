@@ -37,6 +37,11 @@ export const sound = {
   cat,
   sign,
   mouse,
+  boot,
+  eat,
+  meow: () => {
+    if (live()) meow(ctx.currentTime);
+  },
 };
 
 if (enabled) armStart();
@@ -234,6 +239,37 @@ function mouse(up = false) {
   src.buffer = noise;
   src.connect(filter("bandpass", up ? 5200 : 4200, 2.5)).connect(envelope(t, up ? 0.12 : 0.3, 0.0008, 0.02)).connect(master);
   src.start(t, Math.random() * 2, 0.03);
+}
+
+// Power-on chord: a soft major swell, the "computer is waking up" cue.
+function boot() {
+  if (!live()) return;
+  const t = ctx.currentTime + 0.05;
+  for (const freq of [261.6, 329.6, 392, 523.3]) {
+    const osc = ctx.createOscillator();
+    osc.type = "triangle";
+    osc.frequency.value = freq;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.06, t + 0.08);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 2.2);
+    osc.connect(filter("lowpass", 2400, 0.7)).connect(g).connect(master);
+    osc.start(t);
+    osc.stop(t + 2.3);
+  }
+}
+
+// A few dry crunches while the cat eats.
+function eat() {
+  if (!live()) return;
+  const t = ctx.currentTime;
+  for (let i = 0; i < 6; i += 1) {
+    const at = t + 0.2 + i * 0.32 + Math.random() * 0.08;
+    const src = ctx.createBufferSource();
+    src.buffer = noise;
+    src.connect(filter("bandpass", 1800 + Math.random() * 900, 1.2)).connect(envelope(at, 0.22, 0.004, 0.07)).connect(master);
+    src.start(at, Math.random() * 2, 0.1);
+  }
 }
 
 function chime() {

@@ -59,6 +59,7 @@ export const projects = [
       "В сценарии заказа есть контакт, адрес, размер, доставка, оплата и промокод.",
       "В коде есть админские сценарии: товары, промокоды, рассылка, трек-номер, поддержка.",
       "Каталог — HTML-страница Telegram Mini App. Состав заказа приходит в бота через web_app_data.",
+      "Живая копия каталога лежит на телефоне у монитора: команда shop.",
     ],
     links: [
       { label: "код", href: "https://github.com/Renfild/tgbotshop" },
@@ -78,6 +79,7 @@ export const projects = [
       "API на FastAPI отдаёт питомцев, магазин, игры, маркет и websocket.",
       "docker-compose поднимает PostgreSQL, Redis, MinIO и Celery.",
       "Мини-приложение написано на React 18 и TypeScript. В зависимостях Zustand, Framer Motion и Telegram WebApp.",
+      "Рыжий кот на столе — маленькое демо: команды feed, play, pet и cat.",
     ],
     links: [{ label: "код", href: "https://github.com/Renfild/tamagotchi-bot" }],
   },

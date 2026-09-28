@@ -1,4 +1,5 @@
 import { profile, projects, skills } from "./data.js";
+import { PET_REPO, act, bar, mood, moodLabel, settle } from "./pet.js";
 
 export const PUBLIC_COMMANDS = [
   "help",
@@ -13,9 +14,16 @@ export const PUBLIC_COMMANDS = [
   "pwd",
   "history",
   "sound",
+  "cat",
+  "feed",
+  "play",
+  "pet",
+  "shop",
 ];
 
 const COMMAND_ALIASES = {
+  tamagotchi: "cat",
+  meow: "pet",
   "?": "help",
   q: "close",
   exit: "close",
@@ -172,6 +180,17 @@ export function run(raw, state = {}) {
       return changeDir(cwd, parsed.args);
     case "sound":
       return soundCommand(cwd, parsed.args, state.sound === true);
+    case "cat":
+      if (parsed.args.length) {
+        return finish(cwd, [{ t: "err", text: `cat: ${parsed.args[0]}: это кот, а не файл. попробуйте просто cat` }]);
+      }
+      return petCommand(cwd, "status", state);
+    case "feed":
+    case "play":
+    case "pet":
+      return rejectExtra(parsed, cwd) ?? petCommand(cwd, parsed.cmd, state);
+    case "shop":
+      return rejectExtra(parsed, cwd) ?? shopCommand(cwd);
     default:
       return unknown(cwd, parsed);
   }
@@ -232,6 +251,11 @@ function helpBlocks() {
     ["pwd", "текущий путь"],
     ["history", "прошлые команды"],
     ["sound", "включить или выключить звук"],
+    ["cat", "кот-тамагочи: сытость и настроение"],
+    ["feed", "покормить кота"],
+    ["play", "поиграть с котом"],
+    ["pet", "погладить кота"],
+    ["shop", "демо Telegram-магазина на телефоне"],
   ];
   const keys = [
     ["↑ ↓", "история ввода"],
@@ -373,6 +397,46 @@ function changeDir(cwd, args) {
   return finish(project.id, caseBlocks(project), { alt: "enter", scroll: "top" });
 }
 
+const PET_LINES = {
+  feed: ["Кот ест. Хрум-хрум.", "Кот сыт и отворачивается от миски."],
+  play: ["Кот гоняет клубок по столу.", "Кот слишком голоден, чтобы играть. Сначала feed."],
+  pet: ["Кот мурлычет и жмурится.", ""],
+  status: ["", ""],
+};
+
+function petCommand(cwd, action, state) {
+  const now = Number.isFinite(state.now) ? state.now : Date.now();
+  const { pet, took } = action === "status" ? { pet: settle(state.pet, now), took: true } : act(state.pet, action, now);
+  const value = mood(pet);
+  const blocks = [{ t: "h", text: "кот" }];
+  const line = PET_LINES[action][took ? 0 : 1];
+  if (line) blocks.push({ t: took ? "p" : "dim", text: line });
+  blocks.push(
+    { t: "kv", k: "сытость", v: bar(pet.food) },
+    { t: "kv", k: "радость", v: bar(pet.joy) },
+    { t: "kv", k: "настроение", v: moodLabel(value) },
+    { t: "gap" },
+    { t: "run", cmd: "feed", label: "feed", hint: "покормить" },
+    { t: "run", cmd: "play", label: "play", hint: "поиграть" },
+    { t: "run", cmd: "pet", label: "pet", hint: "погладить" },
+    { t: "gap" },
+    { t: "dim", text: "Это демо tamagotchi-bot: в Telegram у питомца ещё есть инвентарь, магазин, квесты и арена." },
+    { t: "linkrow", k: "проект", href: PET_REPO, text: PET_REPO },
+  );
+  return finish(cwd, blocks, { pet, petAction: took ? action : "status" });
+}
+
+function shopCommand(cwd) {
+  return finish(
+    cwd,
+    [
+      { t: "p", text: "Открываю Mini App магазина на телефоне." },
+      { t: "dim", text: "Демо tgbotshop: каталог, размеры, корзина и оформление заказа. Esc — назад к столу." },
+    ],
+    { shop: true },
+  );
+}
+
 function soundCommand(cwd, args, current) {
   if (args.length > 1) return finish(cwd, [{ t: "err", text: "sound: лишние аргументы" }]);
   const arg = (args[0] ?? "").toLowerCase();
@@ -465,6 +529,9 @@ function finish(cwd, blocks, extra = {}) {
     alt,
     scroll: extra.scroll ?? (alt === "enter" ? "top" : "bottom"),
     sound: extra.sound ?? null,
+    pet: extra.pet ?? null,
+    petAction: extra.petAction ?? null,
+    shop: extra.shop ?? false,
   };
 }
 

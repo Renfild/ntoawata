@@ -9,6 +9,7 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect fill='%230c0f0c' width='16' height='16'/%3E%3Crect fill='%237CFF6B' x='2' y='3' width='8' height='10'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="css/terminal.css" />
     <link rel="stylesheet" href="css/scene.css" />
+    <link rel="stylesheet" href="css/shop.css" />
     <script type="importmap">
       {
         "imports": {
@@ -62,8 +63,23 @@
       </div>
       <div class="scan" aria-hidden="true"></div>
       <div class="glare" aria-hidden="true"></div>
+      <div id="boot" class="boot" role="button" aria-label="Включить компьютер">
+        <div class="boot-power">
+          <svg viewBox="0 0 48 48" width="64" height="64" aria-hidden="true"><path d="M24 6v16" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M14 12a15 15 0 1 0 20 0" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>
+          <p>нажмите, чтобы включить</p>
+          <small>или любую клавишу</small>
+        </div>
+        <div class="boot-screen">
+          <div class="boot-log" aria-live="polite"></div>
+          <div class="boot-bar"><div class="boot-fill"></div></div>
+          <small class="boot-skip">Esc — пропустить</small>
+        </div>
+      </div>
     </div>
-    <p id="hint" class="sr">Tab дополняет команды и имена репозиториев. Стрелки листают историю. Тяните стол мышью, колёсико приближает. Клавиши на столе печатают в экран, неоновые вывески открывают проекты, лампа включается щелчком, кота можно разбудить. Кнопка «звук» или команда sound включает звук. Щелчок по монитору приближает экран, Esc отдаляет.</p>
+    <div id="phone" class="phone is-sheet" role="dialog" aria-label="Демо Telegram-магазина">
+      <div id="shop"></div>
+    </div>
+    <p id="hint" class="sr">Tab дополняет команды и имена репозиториев. Стрелки листают историю. Тяните стол мышью, колёсико приближает. Клавиши на столе печатают в экран, неоновые вывески открывают проекты, лампа включается щелчком, кота можно разбудить. Кнопка «звук» или команда sound включает звук. Щелчок по монитору приближает экран, Esc отдаляет. Команда shop открывает демо Telegram-магазина на телефоне, feed, play и pet ухаживают за котом.</p>
     <script type="module" src="js/terminal.js"></script>
     <script type="module" src="js/world.js"></script>
   </body>

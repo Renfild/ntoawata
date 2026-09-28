@@ -14,6 +14,10 @@ const SCALE = 0.0019;
 const SCREEN_W = CRT_W * SCALE;
 const SCREEN_H = CRT_H * SCALE;
 
+const PHONE_W = 390;
+const PHONE_H = 844;
+const PHONE_SCALE = 0.37 / PHONE_W;
+
 const KEY_U = 0.1;
 const KEY_GAP = 0.012;
 const KEY_H = 0.046;
@@ -147,10 +151,12 @@ function boot() {
   composer.addPass(new OutputPass());
 
   const pickables = [];
-  const screenAnchor = buildWorld(scene, pickables);
+  const { screen: screenAnchor, phone: phoneAnchor } = buildWorld(scene, pickables);
 
   let cssRenderer = null;
   let crtObject = null;
+  let phoneObject = null;
+  const phoneEl = document.querySelector("#phone");
   let screenPlaced = false;
   const hintEl = document.querySelector("#hint");
   if (desktop) mountScreen(screenAnchor);
@@ -176,8 +182,13 @@ function boot() {
   let pointer = null;
   let hovered = null;
 
-  const view = { zoomed: false, free: intro };
+  const view = { focus: null, free: intro };
   const zoomButton = document.querySelector("#zoom-toggle");
+  // What the camera can fly up to: CSS3D surfaces pinned to anchors, sized in CSS pixels.
+  const surfaces = {
+    screen: { anchor: screenAnchor, w: CRT_W, h: CRT_H, margin: 1.08 },
+    phone: { anchor: phoneAnchor, w: PHONE_W, h: PHONE_H, margin: 1.15 },
+  };
 
   controls.addEventListener("start", () => {
     anim.t = 1;
@@ -185,6 +196,7 @@ function boot() {
   bindPicking(canvas, camera, pickables);
   bindPhysicalKeys();
   bindZoom();
+  document.dispatchEvent(new CustomEvent("desk:ready"));
 
   window.addEventListener("resize", () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -193,8 +205,8 @@ function boot() {
     composer.setSize(window.innerWidth, window.innerHeight);
     cssRenderer?.setSize(window.innerWidth, window.innerHeight);
     frameLayout(wideQuery.matches);
-    if (view.zoomed) {
-      const pose = zoomPose();
+    if (view.focus) {
+      const pose = zoomPose(view.focus);
       camera.position.copy(pose.pos);
       controls.target.copy(pose.target);
       anim.t = 1;
@@ -212,47 +224,72 @@ function boot() {
     view.free = true;
   }
 
-  // Straight in front of the screen, far enough back that the glass fills the view with a thin margin.
-  function zoomPose() {
-    screenAnchor.updateWorldMatrix(true, false);
-    const target = new THREE.Vector3().setFromMatrixPosition(screenAnchor.matrixWorld);
-    const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(screenAnchor.getWorldQuaternion(new THREE.Quaternion()));
+  // Straight in front of a surface, far enough back that it fills the view with a thin margin.
+  function zoomPose(name) {
+    const { anchor, w, h, margin } = surfaces[name];
+    anchor.updateWorldMatrix(true, false);
+    const target = new THREE.Vector3().setFromMatrixPosition(anchor.matrixWorld);
+    const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(anchor.getWorldQuaternion(new THREE.Quaternion()));
+    const scale = anchor.getWorldScale(new THREE.Vector3()).x;
     const tanHalf = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-    const fitH = (SCREEN_H * 1.08) / 2 / tanHalf;
-    const fitW = (SCREEN_W * 1.05) / 2 / (tanHalf * camera.aspect);
+    const fitH = (h * scale * margin) / 2 / tanHalf;
+    const fitW = (w * scale * margin) / 2 / (tanHalf * camera.aspect);
     return { pos: target.clone().addScaledVector(normal, Math.max(fitH, fitW)), target };
   }
 
-  function setZoom(on) {
-    if (!crtObject || on === view.zoomed) return;
-    view.zoomed = on;
-    controls.enabled = !on;
-    if (on) {
-      const pose = zoomPose();
+  function setFocus(name) {
+    if (name === "screen" && !crtObject) return;
+    if (name === "phone" && !phoneObject) return;
+    if (name === view.focus) return;
+    view.focus = name;
+    controls.enabled = !name;
+    if (name) {
+      const pose = zoomPose(name);
       flyTo(pose.pos, pose.target, 1.1);
     } else {
       flyTo(new THREE.Vector3(...HERO.pos), new THREE.Vector3(...HERO.target), 1.1);
     }
-    document.body.classList.toggle("is-zoomed", on);
-    document.dispatchEvent(new CustomEvent("desk:zoomed", { detail: on }));
+    document.body.classList.toggle("is-zoomed", Boolean(name));
+    document.dispatchEvent(new CustomEvent("desk:zoomed", { detail: Boolean(name) }));
     if (zoomButton) {
-      zoomButton.setAttribute("aria-pressed", String(on));
-      zoomButton.querySelector(".zoom-label").textContent = on ? "Esc — отдалить" : "приблизить экран";
+      zoomButton.setAttribute("aria-pressed", String(Boolean(name)));
+      zoomButton.querySelector(".zoom-label").textContent = name ? "Esc — отдалить" : "приблизить экран";
     }
-    focusTerminal();
+    if (name === "phone") phoneEl.querySelector("button")?.focus({ preventScroll: true });
+    else focusTerminal();
   }
 
   function bindZoom() {
-    document.addEventListener("desk:zoom", (event) => setZoom(event.detail !== false));
-    zoomButton?.addEventListener("click", () => setZoom(!view.zoomed));
+    document.addEventListener("desk:zoom", (event) => setFocus(event.detail !== false ? "screen" : null));
+    zoomButton?.addEventListener("click", () => setFocus(view.focus ? null : "screen"));
+    // The terminal's `shop` command asks for the phone; the desk takes it whenever the phone is in 3D.
+    document.addEventListener("desk:shop", (event) => {
+      if (!phoneObject) return;
+      event.preventDefault();
+      setFocus("phone");
+    });
+    phoneEl.addEventListener("shop:close", () => {
+      if (view.focus === "phone") setFocus(null);
+    });
+    // Until the camera is on the phone, a click on it only brings the phone up instead of pressing a button.
+    phoneEl.addEventListener(
+      "click",
+      (event) => {
+        if (!phoneObject || view.focus === "phone") return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setFocus("phone");
+      },
+      true,
+    );
     // Capture phase, ahead of the terminal: while zoomed, Esc only pulls the camera back.
     window.addEventListener(
       "keydown",
       (event) => {
-        if (event.key !== "Escape" || !view.zoomed) return;
+        if (event.key !== "Escape" || !view.focus) return;
         event.preventDefault();
         event.stopImmediatePropagation();
-        setZoom(false);
+        setFocus(null);
       },
       true,
     );
@@ -261,12 +298,13 @@ function boot() {
       press = { x: event.clientX, y: event.clientY };
     });
     crt.addEventListener("pointerup", (event) => {
-      if (!press || view.zoomed || !crtObject) return;
+      if (!press || view.focus === "screen" || !crtObject) return;
+      if (document.body.classList.contains("is-off") || document.body.classList.contains("is-booting")) return;
       const moved = Math.hypot(event.clientX - press.x, event.clientY - press.y) > 5;
       press = null;
       if (moved || event.target.closest("a, button")) return;
       if (window.getSelection()?.toString()) return;
-      setZoom(true);
+      setFocus("screen");
     });
   }
 
@@ -275,20 +313,15 @@ function boot() {
     const dt = Math.min(clock.getDelta(), 0.1);
     const elapsed = clock.elapsedTime;
     stepCamera(anim, camera, controls, dt);
-    if (view.free && anim.t >= 1 && !view.zoomed) {
+    if (view.free && anim.t >= 1 && !view.focus) {
       Object.assign(controls, LIMITS);
       view.free = false;
     }
     controls.update();
     for (const tick of tickers) tick(dt, elapsed);
-    if (crtObject) {
-      screenAnchor.updateWorldMatrix(true, false);
-      screenAnchor.matrixWorld.decompose(crtObject.position, crtObject.quaternion, crtObject.scale);
-      screenAnchor.getWorldQuaternion(quat);
-      face.set(0, 0, 1).applyQuaternion(quat);
-      toCam.copy(camera.position).sub(crtObject.position);
-      crtObject.visible = face.dot(toCam) > 0.2 && screenInView();
-    }
+    // CSS3D surfaces do not depth-sort against each other reliably, so a close-up shows only its own.
+    if (crtObject) placeSurface(crtObject, surfaces.screen, view.focus !== "phone");
+    if (phoneObject) placeSurface(phoneObject, surfaces.phone, view.focus !== "screen");
     composer.render();
     if (cssRenderer) {
       cssRenderer.render(cssRenderer.userData.scene, camera);
@@ -300,13 +333,21 @@ function boot() {
     }
   });
 
+  function placeSurface(object, { anchor, w, h }, allowed) {
+    anchor.updateWorldMatrix(true, false);
+    anchor.matrixWorld.decompose(object.position, object.quaternion, object.scale);
+    face.set(0, 0, 1).applyQuaternion(object.quaternion);
+    toCam.copy(camera.position).sub(object.position);
+    object.visible = allowed && face.dot(toCam) > 0.2 && surfaceInView(anchor, w, h);
+  }
+
   // A CSS3D element that crosses the camera plane or sits off-frame is not drawn,
   // yet the browser still hit-tests it and it swallows clicks meant for the desk.
-  function screenInView() {
+  function surfaceInView(anchor, w, h) {
     camera.updateMatrixWorld();
     screenBox.makeEmpty();
     for (const [x, y] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
-      corner.set((x * CRT_W) / 2, (y * CRT_H) / 2, 0).applyMatrix4(screenAnchor.matrixWorld);
+      corner.set((x * w) / 2, (y * h) / 2, 0).applyMatrix4(anchor.matrixWorld);
       screenBox.expandByPoint(corner);
       if (corner.applyMatrix4(camera.matrixWorldInverse).z > -camera.near * 2) return false;
     }
@@ -337,14 +378,21 @@ function boot() {
 
   function unmountScreen() {
     if (!crtObject) return;
-    if (view.zoomed) setZoom(false);
-    // Removing the object also detaches #crt from the CSS3D layer; put it back in the page flow.
-    cssRenderer.userData.scene.remove(crtObject);
+    if (view.focus) setFocus(null);
+    // Removing an object also detaches its element from the CSS3D layer; put both back in the page flow.
+    const cssScene = cssRenderer.userData.scene;
+    cssScene.remove(crtObject);
+    cssScene.remove(phoneObject);
     crtObject = null;
+    phoneObject = null;
     crt.removeAttribute("style");
     crt.classList.remove("is-crt");
+    phoneEl.removeAttribute("style");
+    phoneEl.classList.remove("is-3d");
+    phoneEl.classList.add("is-sheet");
     document.body.classList.remove("has-crt");
     document.body.insertBefore(crt, hintEl);
+    document.body.insertBefore(phoneEl, hintEl);
     cssRenderer.domElement.style.display = "none";
     focusTerminal();
   }
@@ -367,6 +415,10 @@ function boot() {
     crt.style.userSelect = "text";
     crtObject = new CSS3DObject(crt);
     cssScene.add(crtObject);
+    phoneEl.classList.remove("is-sheet", "is-open");
+    phoneEl.classList.add("is-3d");
+    phoneObject = new CSS3DObject(phoneEl);
+    cssScene.add(phoneObject);
     anchor.updateWorldMatrix(true, false);
   }
 
@@ -510,6 +562,7 @@ function buildWorld(scene, pickables) {
   addRoom(scene);
   addDesk(scene);
   const anchor = addMac(scene, pickables);
+  const phone = addPhone(scene, pickables);
   addMat(scene);
   addKeyboard(scene, pickables);
   addMouse(scene, pickables);
@@ -526,7 +579,7 @@ function buildWorld(scene, pickables) {
   addSigns(scene, pickables);
   addCars(scene);
   addRain(scene);
-  return anchor;
+  return { screen: anchor, phone };
 }
 
 function addLights(scene) {
@@ -890,6 +943,112 @@ function appleTexture() {
   ctx.fill();
   const map = new THREE.CanvasTexture(c);
   map.colorSpace = THREE.SRGBColorSpace;
+  return map;
+}
+
+// A phone leaning on a small aluminium stand left of the keyboard; the shop Mini App lives on its screen.
+function addPhone(scene, pickables) {
+  const group = new THREE.Group();
+  // Kept square to the room: Chromium mis-composites a CSS3D surface that is turned on two axes
+  // once the camera is close to it, so the phone only leans back a little.
+  group.position.set(-1.15, 0.008, 0.74);
+  scene.add(group);
+
+  const alu = new THREE.MeshStandardMaterial({ map: brushedTexture(), color: 0x9fa7b3, roughness: 0.3, metalness: 0.85 });
+  const base = new THREE.Mesh(new RoundedBoxGeometry(0.34, 0.018, 0.3, 2, 0.008), alu);
+  base.position.y = 0.009;
+  base.castShadow = true;
+  base.receiveShadow = true;
+  group.add(base);
+  const lip = new THREE.Mesh(new RoundedBoxGeometry(0.34, 0.035, 0.03, 2, 0.01), alu);
+  lip.position.set(0, 0.03, 0.12);
+  group.add(lip);
+  const rest = new THREE.Mesh(new RoundedBoxGeometry(0.22, 0.5, 0.018, 2, 0.008), alu);
+  rest.position.set(0, 0.25, -0.02);
+  rest.rotation.x = -0.12;
+  rest.castShadow = true;
+  group.add(rest);
+
+  const screenW = PHONE_W * PHONE_SCALE;
+  const screenH = PHONE_H * PHONE_SCALE;
+  const bw = screenW + 0.03;
+  const bh = screenH + 0.03;
+  const phone = new THREE.Group();
+  phone.position.set(0, 0.022, 0.105);
+  phone.rotation.x = -0.12;
+  group.add(phone);
+
+  const body = new THREE.Mesh(
+    new RoundedBoxGeometry(bw, bh, 0.036, 4, 0.03),
+    new THREE.MeshStandardMaterial({ color: 0x3a3f47, roughness: 0.28, metalness: 0.9 }),
+  );
+  body.position.set(0, bh / 2, -0.018);
+  body.castShadow = true;
+  phone.add(body);
+  const glass = new THREE.Mesh(
+    new THREE.PlaneGeometry(screenW + 0.012, screenH + 0.012),
+    new THREE.MeshStandardMaterial({
+      color: 0x000000,
+      emissive: 0xffffff,
+      emissiveMap: shopIdleTexture(),
+      emissiveIntensity: 0.9,
+      roughness: 0.2,
+      metalness: 0.1,
+    }),
+  );
+  glass.position.set(0, bh / 2, 0.0005);
+  phone.add(glass);
+  const button = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.07, 0.012), body.material);
+  button.position.set(bw / 2 + 0.002, bh * 0.7, -0.018);
+  phone.add(button);
+
+  const hit = new THREE.Mesh(new THREE.PlaneGeometry(bw, bh), new THREE.MeshBasicMaterial({ visible: false }));
+  hit.position.set(0, bh / 2, 0.002);
+  hit.userData.onPick = () => document.dispatchEvent(new CustomEvent("terminal:command", { detail: "shop" }));
+  phone.add(hit);
+  pickables.push(hit);
+
+  const anchor = new THREE.Object3D();
+  anchor.position.set(0, bh / 2, 0.0015);
+  anchor.scale.setScalar(PHONE_SCALE);
+  phone.add(anchor);
+  return anchor;
+}
+
+// What the phone shows when the live app is not mapped onto it (narrow layout).
+function shopIdleTexture() {
+  const c = document.createElement("canvas");
+  c.width = 390;
+  c.height = 844;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, 390, 844);
+  ctx.fillStyle = "#17212b";
+  ctx.fillRect(0, 40, 390, 56);
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.font = "700 20px sans-serif";
+  ctx.fillText("VEXSOULS", 195, 76);
+  ctx.font = "800 40px sans-serif";
+  ctx.fillText("VEXSOULS", 195, 170);
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.font = "500 13px sans-serif";
+  ctx.fillText("H A N D M A D E   A R C H I V E", 195, 198);
+  const tones = ["#1d2a44", "#3a1d2e", "#2c2a1a", "#3b1c22"];
+  tones.forEach((tone, i) => {
+    const x = 16 + (i % 2) * 187;
+    const y = 230 + Math.floor(i / 2) * 270;
+    ctx.fillStyle = tone;
+    roundRect(ctx, x, y, 171, 250, 20);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(x + 145, y + 225, 15, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  const map = new THREE.CanvasTexture(c);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = maxAniso;
   return map;
 }
 
@@ -1386,12 +1545,75 @@ function addCat(scene, pickables) {
   root.add(hit);
   pickables.push(hit);
 
-  const state = { awake: 0, lift: 0, heart: 1, nextTwitch: 3 };
-  hit.userData.onPick = () => {
-    if (state.awake < 1) sound.cat();
-    state.awake = 4.5;
-    state.heart = 0;
-  };
+  // Props for the tamagotchi actions: a bowl for feed, a ball of yarn for play, a bubble when hungry.
+  const bowl = new THREE.Group();
+  bowl.position.set(0.44, 0, 0.3);
+  bowl.visible = false;
+  root.add(bowl);
+  const bowlShape = [[0, 0], [0.07, 0], [0.085, 0.01], [0.1, 0.05], [0.094, 0.052], [0.078, 0.014], [0, 0.012]].map(
+    ([x, y]) => new THREE.Vector2(x, y),
+  );
+  const dish = new THREE.Mesh(
+    new THREE.LatheGeometry(bowlShape, 32),
+    new THREE.MeshStandardMaterial({ color: 0x3fb6a8, roughness: 0.35, side: THREE.DoubleSide }),
+  );
+  dish.castShadow = true;
+  bowl.add(dish);
+  const kibble = new THREE.Group();
+  const kibbleMat = new THREE.MeshStandardMaterial({ color: 0x8a5a2b, roughness: 0.8 });
+  for (let i = 0; i < 14; i += 1) {
+    const bit = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 6), kibbleMat);
+    const a = (i / 14) * Math.PI * 2 * 2.3;
+    const r = 0.015 + (i % 5) * 0.012;
+    bit.position.set(Math.cos(a) * r, 0.03 + (i % 3) * 0.006, Math.sin(a) * r);
+    kibble.add(bit);
+  }
+  bowl.add(kibble);
+
+  const ball = new THREE.Group();
+  ball.visible = false;
+  root.add(ball);
+  const yarn = new THREE.MeshStandardMaterial({ color: 0xd8344f, roughness: 0.9 });
+  ball.add(new THREE.Mesh(new THREE.SphereGeometry(0.05, 20, 14), yarn));
+  for (let i = 0; i < 3; i += 1) {
+    const wrap = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.004, 6, 28), new THREE.MeshStandardMaterial({ color: 0xf06a80, roughness: 0.9 }));
+    wrap.rotation.set(i * 1.1, i * 0.7, 0);
+    ball.add(wrap);
+  }
+
+  const bubble = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: bubbleTexture("мяу? feed"), transparent: true, depthWrite: false }),
+  );
+  bubble.scale.set(0.34, 0.14, 1);
+  bubble.position.set(0.3, 0.52, 0.1);
+  bubble.visible = false;
+  root.add(bubble);
+
+  const state = { awake: 0, lift: 0, heart: 1, nextTwitch: 3, mode: null, modeTime: 0, food: 70, nag: 4 };
+  hit.userData.onPick = () => document.dispatchEvent(new CustomEvent("terminal:command", { detail: "pet" }));
+  document.addEventListener("desk:pet", (event) => {
+    const { action, food } = event.detail ?? {};
+    if (Number.isFinite(food)) state.food = food;
+    if (action === "status") return;
+    // A new action replaces the previous one, props included.
+    bowl.visible = false;
+    ball.visible = false;
+    state.awake = action === "pet" ? 4.5 : 5;
+    state.mode = action;
+    state.modeTime = 0;
+    if (action === "pet") {
+      state.heart = 0;
+      sound.cat();
+    } else if (action === "feed") {
+      bowl.visible = true;
+      bowl.scale.setScalar(0.01);
+      kibble.scale.setScalar(1);
+      sound.eat();
+    } else if (action === "play") {
+      ball.visible = true;
+      sound.meow();
+    }
+  });
 
   tickers.push((dt, t) => {
     state.awake = Math.max(0, state.awake - dt);
@@ -1404,6 +1626,41 @@ function addCat(scene, pickables) {
     head.rotation.x = 0.1 - state.lift * 0.4;
     head.rotation.y = 0.7 - state.lift * 0.2;
     head.position.y = 0.2 + state.lift * 0.05;
+
+    if (state.mode) state.modeTime += dt;
+    const m = state.modeTime;
+    if (state.mode === "feed") {
+      // The bowl pops in, the cat dips its head and nods while the kibble disappears.
+      bowl.scale.setScalar(Math.min(1, m * 4));
+      kibble.scale.setScalar(Math.max(0.01, 1 - Math.max(0, m - 0.6) / 3));
+      if (m > 0.4 && m < 3.8) {
+        head.rotation.x = 0.55 + Math.sin(m * 10) * 0.12 * (motion || 0.3);
+        head.rotation.y = 1.1;
+      }
+      if (m > 4.2) bowl.scale.setScalar(Math.max(0.01, 1 - (m - 4.2) * 3));
+      if (m > 4.6) {
+        bowl.visible = false;
+        state.mode = null;
+      }
+    } else if (state.mode === "play") {
+      // The yarn ball bounces across in front of the cushion and the head follows it.
+      const p = Math.min(1, m / 3.6);
+      const x = -0.35 + Math.sin(p * Math.PI * 2.5) * 0.45;
+      ball.position.set(x, 0.05 + Math.abs(Math.sin(m * 6)) * 0.14 * (motion || 0.2), 0.52);
+      ball.rotation.z -= dt * 8 * motion;
+      head.rotation.y = 0.2 + x * 0.9;
+      if (p >= 1) {
+        ball.visible = false;
+        state.mode = null;
+      }
+    } else if (state.mode === "pet" && m > 4.5) {
+      state.mode = null;
+    }
+
+    // A hungry cat asks for food every so often while it dozes.
+    state.nag -= dt;
+    if (state.nag <= 0) state.nag = 11;
+    bubble.visible = state.food < 30 && !awake && state.nag < 3.5;
     tail.rotation.y = Math.sin(t * (awake ? 3.2 : 0.9)) * (awake ? 0.08 : 0.03) * motion;
 
     state.nextTwitch -= dt;
@@ -2322,6 +2579,29 @@ function labelTexture(text, color, w, h, size) {
   const map = new THREE.CanvasTexture(c);
   map.colorSpace = THREE.SRGBColorSpace;
   map.anisotropy = maxAniso;
+  return map;
+}
+
+function bubbleTexture(text) {
+  const c = document.createElement("canvas");
+  c.width = 340;
+  c.height = 140;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "rgba(245, 247, 255, 0.95)";
+  roundRect(ctx, 6, 6, 328, 100, 40);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(70, 100);
+  ctx.lineTo(56, 134);
+  ctx.lineTo(104, 100);
+  ctx.fill();
+  ctx.fillStyle = "#1b1f2a";
+  ctx.font = "600 42px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, 170, 58);
+  const map = new THREE.CanvasTexture(c);
+  map.colorSpace = THREE.SRGBColorSpace;
   return map;
 }
 

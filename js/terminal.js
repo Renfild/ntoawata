@@ -1,7 +1,10 @@
 import { sound } from "./audio.js";
+import { startBoot } from "./boot.js";
+import { mountShop } from "./shop.js";
 import { bootBlocks, complete, createHistory, promptFor, resolveProject, run } from "./engine.js";
 
 const HIST_KEY = "renfild.terminal.history";
+const PET_KEY = "renfild.pet";
 const CHIPS = [
   ["help", "help", ""],
   ["whoami", "whoami", ""],
@@ -11,6 +14,10 @@ const CHIPS = [
   ["clear", "clear", ""],
   ["close", "close", ""],
   ["sound", "sound", ""],
+  ["shop", "shop", ""],
+  ["cat", "cat", ""],
+  ["feed", "feed", ""],
+  ["play", "play", ""],
   ["open aquateche", "open aquateche", "repo"],
   ["open pcai", "open pcai", "repo"],
   ["open tgbotshop", "open tgbotshop", "repo"],
@@ -31,10 +38,12 @@ const caretEl = document.querySelector("#caret");
 const ghostEl = document.querySelector("#ghost");
 const app = document.querySelector(".app");
 const soundToggle = document.querySelector("#sound-toggle");
+const phone = document.querySelector("#phone");
 
 const session = {
   cwd: null,
   history: createHistory(loadHistory()),
+  pet: loadJSON(PET_KEY),
 };
 
 let snapshot = null;
@@ -42,7 +51,9 @@ let zoomed = false;
 let lastTab = null;
 
 buildChips();
+mountShop(document.querySelector("#shop"));
 bindSound();
+bindDesk();
 bindViewport();
 bindInput();
 output.replaceChildren();
@@ -53,6 +64,12 @@ paint();
 const hashed = projectFromHash();
 if (hashed) execute(`open ${hashed.id}`, { record: false, hash: false });
 input.focus();
+startBoot({
+  onPower: () => sound.boot(),
+  onDone: () => {
+    if (!window.matchMedia("(pointer: coarse)").matches) input.focus({ preventScroll: true });
+  },
+});
 
 function buildChips() {
   for (const [command, label, kind] of CHIPS) {
@@ -64,6 +81,35 @@ function buildChips() {
     button.setAttribute("aria-label", command);
     quick.append(button);
   }
+}
+
+// Talk to the 3D desk (world.js) through DOM events, so the terminal still works without WebGL.
+function bindDesk() {
+  document.addEventListener("desk:ready", () => announcePet("status"));
+  phone.addEventListener("shop:close", () => {
+    if (phone.classList.contains("is-open")) closeShop();
+  });
+}
+
+function openShop() {
+  const event = new CustomEvent("desk:shop", { cancelable: true });
+  document.dispatchEvent(event);
+  // The desk takes it when the phone is on screen in 3D; otherwise show the app as a sheet.
+  if (event.defaultPrevented) return;
+  phone.classList.add("is-open");
+  phone.querySelector("button")?.focus({ preventScroll: true });
+}
+
+function closeShop() {
+  phone.classList.remove("is-open");
+  if (!window.matchMedia("(pointer: coarse)").matches) input.focus({ preventScroll: true });
+}
+
+function announcePet(action) {
+  const pet = session.pet;
+  document.dispatchEvent(
+    new CustomEvent("desk:pet", { detail: { action, food: pet?.food ?? 70, joy: pet?.joy ?? 60 } }),
+  );
 }
 
 function bindSound() {
@@ -231,6 +277,10 @@ function onKeyDown(event) {
 }
 
 function closeFromEscape() {
+  if (phone.classList.contains("is-open")) {
+    closeShop();
+    return;
+  }
   if (session.cwd) {
     execute("close");
     return;
@@ -278,9 +328,21 @@ function execute(raw, options = {}) {
     persistHistory();
   }
 
-  const result = run(line, { cwd: session.cwd, history: session.history.items, sound: sound.enabled });
+  const result = run(line, {
+    cwd: session.cwd,
+    history: session.history.items,
+    sound: sound.enabled,
+    pet: session.pet,
+    now: Date.now(),
+  });
   session.cwd = result.state.cwd;
   if (result.sound !== null) sound.set(result.sound);
+  if (result.pet) {
+    session.pet = result.pet;
+    saveJSON(PET_KEY, result.pet);
+    announcePet(result.petAction);
+  }
+  if (result.shop) openShop();
 
   if (result.clear) {
     snapshot = null;
@@ -461,6 +523,22 @@ function loadHistory() {
     return parsed.filter((item) => typeof item === "string").slice(-100);
   } catch {
     return [];
+  }
+}
+
+function loadJSON(key) {
+  try {
+    return JSON.parse(window.localStorage.getItem(key) || "null");
+  } catch {
+    return null;
+  }
+}
+
+function saveJSON(key, value) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage can be blocked; the cat simply forgets between visits.
   }
 }
 
