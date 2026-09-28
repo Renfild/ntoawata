@@ -21,26 +21,7 @@
   <body>
     <a class="skip" href="#cmd">К командной строке</a>
     <canvas id="webgl"></canvas>
-    <div class="hud">
-      <div class="hud-card">
-        <p class="hud-title"><span class="accent">renfild</span> // объёмный терминал</p>
-        <p class="hud-note">Тяните стол мышью. Колёсико приближает. Клавиши на столе печатают в экран.</p>
-        <div class="hud-row">
-          <button type="button" data-view="iso">Общий вид</button>
-          <button type="button" data-view="screen">Экран</button>
-          <button type="button" data-view="keys">Клавиатура</button>
-          <button type="button" id="bloom-toggle">Свечение</button>
-        </div>
-      </div>
-      <div class="hud-signs">
-        <button type="button" data-cmd="whoami">RENFILD</button>
-        <button type="button" data-cmd="open aquateche">AQUA</button>
-        <button type="button" data-cmd="open pcai">RAG</button>
-        <button type="button" data-cmd="open tgbotshop">SHOP</button>
-        <button type="button" data-cmd="open tamagotchi-bot">PET</button>
-        <button type="button" data-cmd="contact">GIT</button>
-      </div>
-    </div>
+    <div class="vignette" aria-hidden="true"></div>
     <div id="crt">
       <div class="app">
         <header class="top">
@@ -72,7 +53,7 @@
       <div class="scan" aria-hidden="true"></div>
       <div class="glare" aria-hidden="true"></div>
     </div>
-    <p id="hint" class="sr">Tab дополняет команды и имена репозиториев. Стрелки листают историю. Тяните сцену, чтобы осмотреть стол. Неоновые вывески и кнопки открывают проекты.</p>
+    <p id="hint" class="sr">Tab дополняет команды и имена репозиториев. Стрелки листают историю. Тяните стол мышью, колёсико приближает. Клавиши на столе печатают в экран, неоновые вывески открывают проекты.</p>
     <script type="module" src="js/terminal.js"></script>
     <script type="module" src="js/world.js"></script>
   </body>

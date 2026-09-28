@@ -23,78 +23,17 @@ body.has-world #webgl {
   overflow: hidden;
 }
 
-.hud {
+.vignette {
   display: none;
   position: fixed;
-  z-index: 6;
-  top: 0.7rem;
-  left: 0.7rem;
-  right: auto;
-  width: min(28rem, calc(100% - 1.4rem));
+  inset: 0;
+  z-index: 4;
   pointer-events: none;
+  background: radial-gradient(ellipse at 50% 44%, transparent 56%, rgba(1, 4, 10, 0.62) 100%);
 }
 
-body.has-world .hud {
+body.has-world .vignette {
   display: block;
-}
-
-.hud-card,
-.hud-signs {
-  pointer-events: auto;
-  background: rgba(8, 14, 18, 0.78);
-  border: 1px solid rgba(124, 255, 107, 0.28);
-  box-shadow: 0 0 24px rgba(73, 231, 255, 0.08);
-  border-radius: 12px;
-  padding: 0.7rem 0.75rem;
-}
-
-.hud-signs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-top: 0.45rem;
-}
-
-.hud-title {
-  margin: 0;
-  color: #d7e0c8;
-  letter-spacing: 0.08em;
-  font-size: 0.82rem;
-}
-
-.hud-note {
-  margin: 0.3rem 0 0.55rem;
-  color: #a8b39c;
-  font-size: 0.75rem;
-}
-
-.hud-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-}
-
-.hud button,
-.hud-signs button {
-  min-height: 36px;
-  border: 1px solid rgba(124, 255, 107, 0.35);
-  background: rgba(12, 28, 18, 0.8);
-  color: #d7e0c8;
-  border-radius: 8px;
-  padding: 0.35rem 0.55rem;
-  cursor: pointer;
-  font: 700 0.75rem/1 var(--font);
-}
-
-.hud-signs button {
-  color: #7CFF6B;
-}
-
-.hud button:hover,
-.hud-signs button:hover,
-.hud button:focus-visible,
-.hud-signs button:focus-visible {
-  border-color: #7CFF6B;
 }
 
 #crt.is-crt {
@@ -148,16 +87,8 @@ body.has-world:not(.has-crt) .app {
 }
 
 @media (max-width: 900px) {
-  .hud-note,
-  .hud-signs {
-    display: none;
-  }
-
-  .hud {
-    top: 0.4rem;
-    left: 0.4rem;
-    width: auto;
-    right: 0.4rem;
+  .vignette {
+    background: radial-gradient(ellipse at 50% 28%, transparent 36%, rgba(1, 4, 10, 0.42) 100%);
   }
 }
 
@@ -168,14 +99,8 @@ body.has-world:not(.has-crt) .app {
   }
 }
 
-@media (pointer: coarse) {
-  .hud button {
-    min-height: 44px;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .hud button {
-    transition: none;
+  .vignette {
+    background: none;
   }
 }

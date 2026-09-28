@@ -188,10 +188,11 @@ test("page keeps the terminal colors, motion guard, and keyboard viewport", () =
   assert.match(html, /js\/terminal\.js/);
   assert.match(html, /js\/world\.js/);
   assert.match(html, /id="webgl"/);
-  assert.match(html, /data-cmd="open aquateche"/);
+  assert.doesNotMatch(html, /class="hud"/);
   assert.match(html, /three\.module\.min\.js/);
   const scene = readFileSync(new URL("../css/scene.css", import.meta.url), "utf8");
   const world = readFileSync(new URL("../js/world.js", import.meta.url), "utf8");
+  assert.match(world, /open aquateche/);
   assert.match(scene, /prefers-reduced-motion/);
   assert.match(world, /OrbitControls/);
   assert.match(world, /prefers-reduced-motion/);

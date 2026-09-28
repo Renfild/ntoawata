@@ -26,11 +26,10 @@ const crt = document.querySelector("#crt");
 const input = document.querySelector("#cmd");
 const form = document.querySelector("#form");
 
-const VIEWS = {
-  iso: { pos: [2.15, 1.62, 2.55], target: [0, 1.08, 0.2] },
-  screen: { pos: [0.02, 1.28, 1.92], target: [0, 1.22, 0.15] },
-  keys: { pos: [0.08, 1.28, 1.82], target: [0, 0.14, 1.02] },
-};
+const HERO = desktop
+  ? { pos: [1.62, 1.52, 2.72], target: [0.02, 1.02, 0.02] }
+  : { pos: [1.7, 2.15, 3.15], target: [0, 1.25, 0.05] };
+const ARRIVE = { pos: [3.05, 2.15, 4.55], target: [0.12, 1.22, -0.55] };
 
 function boot() {
   let renderer;
@@ -51,22 +50,22 @@ function boot() {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.15;
+  renderer.toneMappingExposure = 1.05;
   renderer.setClearColor(0x071018, 1);
   maxAniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x071018);
-  scene.fog = new THREE.FogExp2(0x071018, 0.045);
+  scene.fog = new THREE.FogExp2(0x071018, 0.032);
 
-  const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.08, 40);
-  const start = desktop ? VIEWS.iso : { pos: [1.7, 2.15, 3.15], target: [0, 1.25, 0.05] };
-  camera.position.set(...start.pos);
+  const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.08, 40);
+  const intro = desktop && !reduceMotion;
+  camera.position.set(...(intro ? ARRIVE.pos : HERO.pos));
 
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = !reduceMotion;
   controls.dampingFactor = 0.08;
-  controls.target.set(...start.target);
+  controls.target.set(...(intro ? ARRIVE.target : HERO.target));
   controls.maxPolarAngle = Math.PI / 2 - 0.06;
   controls.minDistance = 1.35;
   controls.maxDistance = 8.5;
@@ -74,7 +73,12 @@ function boot() {
 
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), reduceMotion ? 0.35 : 0.72, 0.38, 0.72);
+  const bloom = new UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    reduceMotion ? 0.22 : 0.4,
+    0.5,
+    0.86,
+  );
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
 
@@ -87,14 +91,23 @@ function boot() {
   document.body.classList.add("has-world");
 
   const clock = new THREE.Clock();
-  const anim = { t: 1, from: new THREE.Vector3(), to: new THREE.Vector3(), targetFrom: new THREE.Vector3(), targetTo: new THREE.Vector3() };
+  const anim = {
+    t: intro ? 0 : 1,
+    duration: 2.8,
+    from: new THREE.Vector3(...(intro ? ARRIVE.pos : HERO.pos)),
+    to: new THREE.Vector3(...HERO.pos),
+    targetFrom: new THREE.Vector3(...(intro ? ARRIVE.target : HERO.target)),
+    targetTo: new THREE.Vector3(...HERO.target),
+  };
   const face = new THREE.Vector3();
   const toCam = new THREE.Vector3();
   const quat = new THREE.Quaternion();
   let pointer = null;
+  let hovered = null;
 
-  bindViews(anim, camera, controls);
-  bindBloom(bloom);
+  controls.addEventListener("start", () => {
+    anim.t = 1;
+  });
   bindPicking(canvas, camera, pickables);
 
   window.addEventListener("resize", () => {
@@ -164,46 +177,26 @@ function boot() {
     });
     dom.addEventListener("pointermove", (event) => {
       const hit = cast(event, dom, cam, raycaster, mouse, objects);
-      dom.style.cursor = hit ? "pointer" : "";
+      const mesh = hit?.object ?? null;
+      dom.style.cursor = mesh ? "pointer" : "";
+      if (hovered === mesh) return;
+      if (hovered?.userData.homeY != null) hovered.position.y = hovered.userData.homeY;
+      hovered = mesh?.userData.homeY != null ? mesh : null;
+      if (hovered) hovered.position.y = hovered.userData.homeY + 0.008;
+    });
+    dom.addEventListener("pointerleave", () => {
+      if (hovered?.userData.homeY != null) hovered.position.y = hovered.userData.homeY;
+      hovered = null;
     });
   }
 }
 
 function stepCamera(anim, camera, controls, dt) {
   if (anim.t >= 1) return;
-  anim.t = Math.min(1, anim.t + dt * (reduceMotion ? 4 : 1.5));
+  anim.t = Math.min(1, anim.t + dt / anim.duration);
   const k = 1 - (1 - anim.t) ** 3;
   camera.position.lerpVectors(anim.from, anim.to, k);
   controls.target.lerpVectors(anim.targetFrom, anim.targetTo, k);
-}
-
-function bindViews(anim, camera, controls) {
-  document.querySelectorAll("[data-view]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const view = VIEWS[button.dataset.view];
-      if (!view) return;
-      anim.from.copy(camera.position);
-      anim.to.set(...view.pos);
-      anim.targetFrom.copy(controls.target);
-      anim.targetTo.set(...view.target);
-      anim.t = 0;
-    });
-  });
-}
-
-function bindBloom(bloom) {
-  const levels = [0.72, 0.35, 0];
-  const labels = ["Свечение: ярко", "Свечение: мягко", "Свечение: выкл"];
-  let index = reduceMotion ? 1 : 0;
-  bloom.strength = levels[index];
-  const button = document.querySelector("#bloom-toggle");
-  if (!button) return;
-  button.textContent = labels[index];
-  button.addEventListener("click", () => {
-    index = (index + 1) % levels.length;
-    bloom.strength = levels[index];
-    button.textContent = labels[index];
-  });
 }
 
 function cast(event, dom, camera, raycaster, mouse, objects) {
@@ -256,9 +249,9 @@ function sendKey(key) {
 }
 
 function buildRoom(scene, pickables) {
-  scene.add(new THREE.AmbientLight(0x203044, 1.35));
+  scene.add(new THREE.AmbientLight(0x243044, 0.72));
 
-  const sun = new THREE.DirectionalLight(0xd7e4ff, 1.15);
+  const sun = new THREE.DirectionalLight(0xeef3ff, 1.45);
   sun.position.set(4.2, 6.4, 3.2);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
@@ -271,14 +264,17 @@ function buildRoom(scene, pickables) {
   sun.shadow.bias = -0.00035;
   scene.add(sun);
 
-  const cyan = new THREE.PointLight(0x49e7ff, 7, 14, 1.4);
-  cyan.position.set(-3.2, 2.8, -0.4);
+  const cyan = new THREE.PointLight(0x49e7ff, 5.5, 10, 1.8);
+  cyan.position.set(-2.8, 2.7, -1.8);
   scene.add(cyan);
-  const pink = new THREE.PointLight(0xff4fd8, 6, 12, 1.5);
-  pink.position.set(3.4, 2.4, -1.2);
+  const pink = new THREE.PointLight(0xff4fd8, 4.2, 9, 1.8);
+  pink.position.set(3.1, 2.35, -2.1);
   scene.add(pink);
-  const phosphor = new THREE.PointLight(0x7cff6b, 2.4, 3.2, 1.2);
-  phosphor.position.set(0, 1.25, 0.85);
+  const fill = new THREE.PointLight(0xfff1d4, 8, 8, 1.6);
+  fill.position.set(0.35, 2.15, 2.55);
+  scene.add(fill);
+  const phosphor = new THREE.PointLight(0x7cff6b, 1.35, 2.4, 1.4);
+  phosphor.position.set(0, 1.28, 0.95);
   phosphor.name = "phosphor";
   scene.add(phosphor);
 
@@ -690,11 +686,16 @@ function addSigns(scene, pickables) {
     ["PET", "open tamagotchi-bot", "#d9a0ff", 2.35, 2.15, -2.1],
     ["GIT", "contact", "#d7f6ff", 2.35, 1.5, -2.05],
   ];
-  signs.forEach(([title, command, color, x, y, z]) => {
+  const group = new THREE.Group();
+  group.name = "signs";
+  scene.add(group);
+  signs.forEach(([title, command, color, x, y, z], index) => {
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 0.42), signMaterial(title, color));
     mesh.position.set(x, y, z);
     mesh.userData.command = command;
-    scene.add(mesh);
+    mesh.userData.baseY = y;
+    mesh.userData.phase = index * 0.7;
+    group.add(mesh);
     pickables.push(mesh);
   });
 }
@@ -762,7 +763,10 @@ function drift(scene, time) {
   const boardLed = scene.getObjectByName("board-led");
   if (boardLed) boardLed.material.emissiveIntensity = 1.4 + Math.sin(time * 8) * 0.8;
   const phosphor = scene.getObjectByName("phosphor");
-  if (phosphor) phosphor.intensity = 2.2 + Math.sin(time * 7) * 0.25;
+  if (phosphor) phosphor.intensity = 1.2 + Math.sin(time * 7) * 0.18;
+  scene.getObjectByName("signs")?.children.forEach((sign) => {
+    sign.position.y = sign.userData.baseY + Math.sin(time * 0.8 + sign.userData.phase) * 0.03;
+  });
 }
 
 function woodMaterial() {
