@@ -125,6 +125,18 @@ function bindInput() {
     closeFromEscape();
   });
 
+  // Typing anywhere on the page lands in the command field: focusing during keydown
+  // makes the browser deliver the character to the field.
+  document.addEventListener("keydown", (event) => {
+    if (event.target === input || event.defaultPrevented) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key.length !== 1 && event.key !== "Backspace") return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest("input, textarea, select, [contenteditable]")) return;
+    if (event.key === " " && target?.closest("button, a")) return;
+    input.focus({ preventScroll: true });
+  });
+
   window.addEventListener("hashchange", () => {
     const project = projectFromHash();
     if (project && session.cwd !== project.id) {
