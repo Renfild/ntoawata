@@ -75,14 +75,64 @@ body.has-world .vignette {
   z-index: 3;
 }
 
+/* Narrow layout: the terminal is docked over the lower part of the page, the desk shows above it.
+   --dock is the share of the height the terminal takes; the "стол" button lowers it. */
+body.has-world:not(.has-crt) {
+  --dock: 0.68;
+}
+
+body.has-world.dock-low:not(.has-crt) {
+  --dock: 0.28;
+}
+
 body.has-world:not(.has-crt) .app {
   position: fixed;
   left: 0;
   right: 0;
-  top: calc(var(--app-top) + var(--app-height) * 0.32);
-  height: calc(var(--app-height) * 0.68);
+  top: calc(var(--app-top) + var(--app-height) * (1 - var(--dock)));
+  height: calc(var(--app-height) * var(--dock));
   bottom: auto;
   z-index: 4;
+  transition: top 0.35s ease, height 0.35s ease;
+}
+
+body.has-world.dock-low:not(.has-crt) .output {
+  display: none;
+}
+
+body.has-world:not(.has-crt) .corner {
+  left: calc(12px + env(safe-area-inset-left));
+  right: auto;
+}
+
+.dock-toggle {
+  display: none;
+  margin-left: auto;
+  padding: 0.25rem 0.7rem;
+  min-height: 34px;
+  border: 1px solid #314033;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dim);
+  font: 0.8rem var(--font);
+  cursor: pointer;
+}
+
+body.has-world:not(.has-crt) .dock-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+@media (max-width: 640px) {
+  body.has-world:not(.has-crt) .link-host {
+    display: none;
+  }
+}
+
+.dock-toggle[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 @media (max-width: 900px) {
@@ -91,7 +141,25 @@ body.has-world:not(.has-crt) .app {
   }
 }
 
-@media (max-height: 520px) {
+/* Phone on its side: desk on the left, terminal on the right. */
+@media (max-height: 520px) and (orientation: landscape) {
+  body.has-world:not(.has-crt) .app {
+    top: var(--app-top);
+    height: var(--app-height);
+    left: 42%;
+    border-left: 1px solid var(--line);
+  }
+
+  body.has-world:not(.has-crt) .dock-toggle {
+    display: none;
+  }
+
+  body.has-world.dock-low:not(.has-crt) .output {
+    display: block;
+  }
+}
+
+@media (max-height: 520px) and (orientation: portrait) {
   body.has-world:not(.has-crt) .app {
     top: var(--app-top);
     height: var(--app-height);

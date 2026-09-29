@@ -25,7 +25,9 @@ const KEY_TRAVEL = 0.014;
 const KEY_BASE = 0.012;
 
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-const desktop = window.matchMedia("(min-width: 900px)").matches;
+// Wide enough and tall enough for the terminal to live on the monitor; a phone on its side is neither.
+const wideQuery = window.matchMedia("(min-width: 900px) and (min-height: 560px)");
+const desktop = wideQuery.matches;
 const coarse = window.matchMedia("(pointer: coarse)").matches;
 // Ambient motion (rain, cars, breathing) scales by this; direct feedback such as key presses does not.
 const motion = reduceMotion ? 0 : 1;
@@ -42,7 +44,6 @@ const crt = document.querySelector("#crt");
 const input = document.querySelector("#cmd");
 const form = document.querySelector("#form");
 
-const wideQuery = window.matchMedia("(min-width: 900px)");
 // Opening shot per layout: wide windows put the terminal on the monitor, narrow ones dock it below the scene.
 const HEROES = {
   wide: { pos: [2.0, 2.3, 4.3], target: [0.05, 0.9, 0.45] },
@@ -115,7 +116,8 @@ function boot() {
   }
   if (!renderer.getContext()) return;
 
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+  // Phones have dense screens and small GPUs: render below native resolution there.
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, coarse ? 1.25 : 1.5));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -161,6 +163,8 @@ function boot() {
   const phoneEl = document.querySelector("#phone");
   let screenPlaced = false;
   const hintEl = document.querySelector("#hint");
+  // Share of the page height the docked terminal covers in the narrow layout (see frameLayout).
+  let dockShare = 0.68;
   if (desktop) mountScreen(screenAnchor);
   frameLayout(desktop);
   document.body.classList.add("has-world");
@@ -370,12 +374,31 @@ function boot() {
 
   // Narrow layout docks the terminal over the lower 68% of the page. Shift the projection so the
   // desk sits in the middle of the strip left above it, and widen the lens so the whole desk fits.
+  // Narrow layouts dock the terminal over part of the page. Shift the projection so the desk sits in
+  // the middle of whatever is left for it, and widen the lens when that area is small.
+  document.addEventListener("desk:dock", (event) => {
+    if (Number.isFinite(event.detail)) dockShare = event.detail;
+    frameLayout(wideQuery.matches);
+  });
+
   function frameLayout(isWide) {
     const w = window.innerWidth;
     const h = window.innerHeight;
-    camera.fov = isWide ? 38 : 68;
-    if (isWide || h <= 520) camera.clearViewOffset();
-    else camera.setViewOffset(w, h, 0, h * 0.34, w, h);
+    camera.clearViewOffset();
+    if (isWide) {
+      camera.fov = 38;
+    } else if (h <= 520 && w > h) {
+      // Landscape phone: the terminal takes the right 58%, the desk the left 42%.
+      camera.fov = 58;
+      camera.setViewOffset(w, h, w * 0.29, 0, w, h);
+    } else if (h <= 520) {
+      camera.fov = 50;
+    } else {
+      const share = 1 - dockShare;
+      // A tall portrait strip has little horizontal view; a wider lens keeps the phone and the cat in frame.
+      camera.fov = share < 0.45 ? 68 : 72;
+      camera.setViewOffset(w, h, 0, h * (0.5 - share / 2), w, h);
+    }
     camera.updateProjectionMatrix();
   }
 
@@ -601,7 +624,7 @@ function addLights(scene) {
   const moon = new THREE.DirectionalLight(0xb4c2ff, 1.25);
   moon.position.set(-2.6, 5.6, -3.8);
   moon.castShadow = true;
-  moon.shadow.mapSize.set(2048, 2048);
+  moon.shadow.mapSize.set(coarse ? 1024 : 2048, coarse ? 1024 : 2048);
   moon.shadow.camera.near = 0.5;
   moon.shadow.camera.far = 14;
   moon.shadow.camera.left = -3.5;
@@ -1367,7 +1390,7 @@ function addLamp(scene, pickables) {
 
   const spot = new THREE.SpotLight(0xffd6a0, 0, 5, 0.62, 0.65, 1.5);
   spot.position.copy(bulb.position);
-  spot.castShadow = true;
+  spot.castShadow = !coarse;
   spot.shadow.mapSize.set(1024, 1024);
   spot.shadow.bias = -0.0006;
   spot.shadow.normalBias = 0.01;
@@ -1428,7 +1451,7 @@ function addCat(scene, pickables) {
   rim.castShadow = true;
   root.add(rim);
 
-  const layers = desktop ? 22 : 12;
+  const layers = desktop ? 22 : coarse ? 9 : 12;
   const ginger = coatTexture(["#e0924a", "#a9582a", "#f2c08c"]);
   const cream = coatTexture(["#f3dcc0", "#e2bf98", "#fff2e0"]);
   const face = coatTexture(["#e39a52", "#b8672f", "#f6caa0"], 0.3);
