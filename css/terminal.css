@@ -246,16 +246,19 @@ form {
   margin: 0;
 }
 
+/* One swipeable row: on a phone a wrapped block of chips ate half the screen. */
 .quick {
   order: 3;
   display: flex;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
+  flex: none;
+  flex-wrap: nowrap;
   gap: 0.4rem;
-  align-content: flex-start;
-  min-height: 0;
-  overflow: auto;
-  padding-top: 0.55rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  padding: 0.55rem 0 0.2rem;
+  mask-image: linear-gradient(90deg, #000 88%, transparent);
   scrollbar-width: thin;
   scrollbar-color: #314033 transparent;
 }
@@ -361,7 +364,9 @@ form {
 
 .chip {
   flex: 0 0 auto;
-  min-height: 44px;
+  min-height: 42px;
+  scroll-snap-align: start;
+  white-space: nowrap;
   padding: 0.4rem 0.7rem;
   border: 1px solid #314033;
   border-radius: 2px;
@@ -427,10 +432,6 @@ button:focus-visible,
     margin-bottom: 0.55rem;
   }
 
-  .cmdline {
-    flex-direction: column;
-    align-items: stretch;
-  }
 }
 
 @media (pointer: coarse) {

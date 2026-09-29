@@ -39,6 +39,9 @@ const ghostEl = document.querySelector("#ghost");
 const app = document.querySelector(".app");
 const soundToggle = document.querySelector("#sound-toggle");
 const phone = document.querySelector("#phone");
+const dockToggle = document.querySelector("#dock-toggle");
+// Phones get a short prompt so the command field stays on the same line as it.
+const compactQuery = window.matchMedia("(max-width: 640px)");
 
 const session = {
   cwd: null,
@@ -85,10 +88,34 @@ function buildChips() {
 
 // Talk to the 3D desk (world.js) through DOM events, so the terminal still works without WebGL.
 function bindDesk() {
-  document.addEventListener("desk:ready", () => announcePet("status"));
+  document.addEventListener("desk:ready", () => {
+    announcePet("status");
+    announceDock();
+  });
+  dockToggle.addEventListener("click", () => setDockLow(!document.body.classList.contains("dock-low")));
+  // Tapping the iMac in the docked layout brings the terminal back up.
+  document.addEventListener("desk:zoom", () => {
+    if (!document.body.classList.contains("has-crt")) setDockLow(false);
+  });
+  compactQuery.addEventListener("change", updateChrome);
   phone.addEventListener("shop:close", () => {
     if (phone.classList.contains("is-open")) closeShop();
   });
+}
+
+// Narrow layout: lower the terminal to give the desk most of the screen, or raise it back.
+function setDockLow(low) {
+  document.body.classList.toggle("dock-low", low);
+  dockToggle.setAttribute("aria-pressed", String(low));
+  dockToggle.querySelector(".dock-label").textContent = low ? "терминал" : "стол";
+  dockToggle.querySelector(".dock-arrow").textContent = low ? "▾" : "▴";
+  announceDock();
+  if (!low) scrollOutput("bottom");
+}
+
+function announceDock() {
+  const low = document.body.classList.contains("dock-low");
+  document.dispatchEvent(new CustomEvent("desk:dock", { detail: low ? 0.28 : 0.68 }));
 }
 
 function openShop() {
@@ -456,7 +483,7 @@ function appendEcho(cwd, command) {
 }
 
 function updateChrome() {
-  promptEl.textContent = promptFor(session.cwd);
+  promptEl.textContent = compactQuery.matches ? `${session.cwd ?? "~"}$` : promptFor(session.cwd);
   const esc = zoomed ? "Esc отдаляет экран" : session.cwd ? "Esc закрывает кейс" : "help — список команд";
   statusEl.textContent = `${session.cwd ? promptPath(session.cwd) : "~"}  ·  ${esc}`;
   document.title = session.cwd ? `${session.cwd} — Renfild` : "Renfild — терминал";
