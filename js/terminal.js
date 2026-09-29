@@ -57,6 +57,7 @@ buildChips();
 mountShop(document.querySelector("#shop"));
 bindSound();
 bindDesk();
+bindKonami();
 bindViewport();
 bindInput();
 output.replaceChildren();
@@ -157,6 +158,76 @@ function bindViewport() {
   apply();
   viewport.addEventListener("resize", apply);
   viewport.addEventListener("scroll", apply);
+}
+
+const KONAMI = ["ArrowUp", "ArrowUp", "ArrowDown", "ArrowDown", "ArrowLeft", "ArrowRight", "ArrowLeft", "ArrowRight", "b", "a"];
+
+// ↑↑↓↓←→←→BA anywhere on the page throws the party.
+function bindKonami() {
+  let step = 0;
+  window.addEventListener("keydown", (event) => {
+    const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+    step = key === KONAMI[step] ? step + 1 : key === KONAMI[0] ? 1 : 0;
+    if (step === KONAMI.length) {
+      step = 0;
+      // Let the "a" land first, then clear what the code typed into the field.
+      window.setTimeout(() => {
+        input.value = "";
+        paint();
+        execute("party");
+      }, 0);
+    }
+  });
+}
+
+// Green digital rain over the terminal; any key, click or ~7 seconds ends it.
+function startMatrix() {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  if (app.querySelector(".matrix")) return;
+  const canvas = document.createElement("canvas");
+  canvas.className = "matrix";
+  canvas.setAttribute("aria-hidden", "true");
+  app.append(canvas);
+  const scale = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.max(1, Math.round(app.clientWidth * scale));
+  canvas.height = Math.max(1, Math.round(app.clientHeight * scale));
+  const ctx = canvas.getContext("2d");
+  const size = 16 * scale;
+  const glyphs = "アカサタナハマヤラワ0123456789RENFILDｦｱｳｴｵｶｷｹｺｻｼｽｾｿﾀﾂﾃﾅﾆﾇﾈﾊﾋﾎﾏﾐﾑﾒﾓﾔﾕﾗﾘﾜ";
+  const drops = Array.from({ length: Math.ceil(canvas.width / size) }, () => Math.random() * -40);
+  const started = performance.now();
+  let frame = 0;
+  let last = 0;
+  const tick = () => {
+    // About 22 steps a second whatever the refresh rate, so the rain reads instead of blurring.
+    if (performance.now() - last < 45) {
+      frame = requestAnimationFrame(tick);
+      return;
+    }
+    last = performance.now();
+    ctx.fillStyle = "rgba(0, 0, 0, 0.08)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.font = `${size}px monospace`;
+    drops.forEach((y, i) => {
+      const char = glyphs[Math.floor(Math.random() * glyphs.length)];
+      ctx.fillStyle = Math.random() > 0.96 ? "#d7ffd1" : "#7CFF6B";
+      ctx.fillText(char, i * size, y * size);
+      drops[i] = y * size > canvas.height && Math.random() > 0.975 ? 0 : y + 1;
+    });
+    // rAF timestamps can run ahead of performance.now() when frames are slow; time it directly.
+    if (performance.now() - started > 7000) stop();
+    else frame = requestAnimationFrame(tick);
+  };
+  const stop = () => {
+    cancelAnimationFrame(frame);
+    window.removeEventListener("keydown", stop, true);
+    canvas.removeEventListener("pointerdown", stop);
+    canvas.classList.add("off");
+    window.setTimeout(() => canvas.remove(), 400);
+  };
+  window.addEventListener("keydown", stop, true);
+  canvas.addEventListener("pointerdown", stop);
+  frame = requestAnimationFrame(tick);
 }
 
 function bindInput() {
@@ -370,6 +441,11 @@ function execute(raw, options = {}) {
     announcePet(result.petAction);
   }
   if (result.shop) openShop();
+  if (result.effect === "matrix") startMatrix();
+  else if (result.effect) {
+    if (result.effect === "party") sound.party();
+    document.dispatchEvent(new CustomEvent("desk:effect", { detail: result.effect }));
+  }
 
   if (result.clear) {
     snapshot = null;
