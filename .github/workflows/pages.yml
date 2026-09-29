@@ -36,7 +36,7 @@ jobs:
       - name: Collect the site
         run: |
           mkdir _site
-          cp -r index.html css js vendor _site/
+          cp -r index.html og.png css js vendor _site/
           touch _site/.nojekyll
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

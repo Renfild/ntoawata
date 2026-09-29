@@ -35,6 +35,8 @@ let maxAniso = 8;
 
 // Every per-frame update registers here and receives (dt, elapsed) in seconds.
 const tickers = [];
+// Things the party mode recolours; filled while the scene is built.
+const party = { left: 0, signs: [], lights: [] };
 const keyByCode = new Map();
 const keyMeshes = [];
 const legendCache = new Map();
@@ -478,20 +480,42 @@ function boot() {
       else if (data.key) sendKey(data.key);
     });
     dom.addEventListener("pointermove", (event) => {
-      if (event.buttons) return;
+      if (event.buttons) {
+        showTip(null);
+        return;
+      }
       const hit = cast(event, dom, cam, raycaster, mouse, objects);
       const mesh = hit?.object ?? null;
       dom.style.cursor = mesh ? "pointer" : "";
+      if (event.pointerType === "mouse") showTip(mesh?.userData.tip, event.clientX, event.clientY);
       if (hovered === mesh) return;
       hovered?.userData.onHover?.(false);
       hovered = mesh;
       hovered?.userData.onHover?.(true);
     });
     dom.addEventListener("pointerleave", () => {
+      showTip(null);
       hovered?.userData.onHover?.(false);
       hovered = null;
     });
   }
+}
+
+// A small label that follows the mouse over things on the desk that do something when clicked.
+const tipEl = document.createElement("div");
+tipEl.className = "desk-tip";
+tipEl.setAttribute("aria-hidden", "true");
+document.body.append(tipEl);
+
+function showTip(text, x = 0, y = 0) {
+  if (!text) {
+    tipEl.classList.remove("on");
+    return;
+  }
+  tipEl.textContent = text;
+  const left = Math.min(x + 16, window.innerWidth - tipEl.offsetWidth - 8);
+  tipEl.style.transform = `translate(${Math.max(8, left)}px, ${y + 18}px)`;
+  tipEl.classList.add("on");
 }
 
 function focusTerminal() {
@@ -607,6 +631,8 @@ function buildWorld(scene, pickables) {
   addCity(scene);
   addClouds(scene);
   addSearchlights(scene);
+  addCoffee(scene);
+  addParty();
   const screen = adScreen();
   addBillboard(scene, screen);
   addBlimp(scene, screen);
@@ -915,6 +941,7 @@ function addMac(scene, pickables) {
   const hit = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ visible: false }));
   hit.position.set(0, cy, front + 0.001);
   hit.userData.onPick = () => document.dispatchEvent(new CustomEvent("desk:zoom", { detail: true }));
+  hit.userData.tip = "экран · приблизить";
   group.add(hit);
   pickables.push(hit);
 
@@ -1040,6 +1067,7 @@ function addPhone(scene, pickables) {
   const hit = new THREE.Mesh(new THREE.PlaneGeometry(bw, bh), new THREE.MeshBasicMaterial({ visible: false }));
   hit.position.set(0, bh / 2, 0.002);
   hit.userData.onPick = () => document.dispatchEvent(new CustomEvent("terminal:command", { detail: "shop" }));
+  hit.userData.tip = "телефон · демо Telegram-магазина";
   phone.add(hit);
   pickables.push(hit);
 
@@ -1267,6 +1295,7 @@ function addMouse(scene, pickables) {
   hit.position.y = 0.04;
   // The press itself comes from the window listener below; picking only keeps the pointer cursor.
   hit.userData.onPick = () => {};
+  hit.userData.tip = "мышь · повторяет вашу";
   group.add(hit);
   pickables.push(hit);
 
@@ -1414,6 +1443,8 @@ function addLamp(scene, pickables) {
     state.on = !state.on;
     sound.lamp(state.on);
   };
+  hit.userData.tip = "лампа · включить или выключить";
+  party.lights.push(spot);
   tickers.push((dt) => {
     const goal = state.on ? 1 : 0;
     state.level += (goal - state.level) * (reduceMotion ? 1 : Math.min(1, dt * 9));
@@ -1626,6 +1657,7 @@ function addCat(scene, pickables) {
 
   const state = { awake: 0, lift: 0, heart: 1, nextTwitch: 3, mode: null, modeTime: 0, food: 70, nag: 4 };
   hit.userData.onPick = () => document.dispatchEvent(new CustomEvent("terminal:command", { detail: "pet" }));
+  hit.userData.tip = "кот · погладить";
   document.addEventListener("desk:pet", (event) => {
     const { action, food } = event.detail ?? {};
     if (Number.isFinite(food)) state.food = food;
@@ -1987,8 +2019,15 @@ function adScreen() {
   const texture = new THREE.CanvasTexture(c);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = maxAniso;
-  const words = "RENFILD ▸ PYTHON ▸ RAG ▸ TELEGRAM ▸ MINECRAFT ▸ OPENCV ▸ ";
+  let words = "RENFILD ▸ PYTHON ▸ RAG ▸ TELEGRAM ▸ MINECRAFT ▸ OPENCV ▸ ";
+  let caption = "github.com/Renfild";
   let acc = 1;
+  // Swap the slogan for the latest public commits when GitHub answers; keep the slogan otherwise.
+  latestCommits().then((commits) => {
+    if (!commits.length) return;
+    words = commits.map((c) => `${c.repo}: ${c.message} ▸ `).join("");
+    caption = "live · последние коммиты на GitHub";
+  });
   const draw = (t) => {
     const hue = (t * 18) % 360;
     const bg = ctx.createLinearGradient(0, 0, 512, 256);
@@ -2004,7 +2043,7 @@ function adScreen() {
     ctx.fillText(words + words, x, 110);
     ctx.font = "500 30px ui-monospace, monospace";
     ctx.fillStyle = "rgba(255,255,255,0.7)";
-    ctx.fillText("github.com/Renfild", 22, 212);
+    ctx.fillText(caption, 22, 212);
     ctx.fillStyle = "rgba(0,0,0,0.22)";
     for (let y = 0; y < 256; y += 4) ctx.fillRect(0, y, 512, 1);
     texture.needsUpdate = true;
@@ -2018,6 +2057,28 @@ function adScreen() {
     draw(t);
   });
   return texture;
+}
+
+async function latestCommits() {
+  try {
+    const response = await fetch("https://api.github.com/users/Renfild/events/public?per_page=40", {
+      headers: { Accept: "application/vnd.github+json" },
+    });
+    if (!response.ok) return [];
+    const events = await response.json();
+    const commits = [];
+    for (const event of events) {
+      if (event.type !== "PushEvent") continue;
+      const repo = String(event.repo?.name ?? "").split("/").pop();
+      for (const commit of event.payload?.commits ?? []) {
+        const message = String(commit.message ?? "").split("\n")[0].trim();
+        if (message) commits.push({ repo, message: message.length > 46 ? `${message.slice(0, 45)}…` : message });
+      }
+    }
+    return commits.slice(0, 6);
+  } catch {
+    return [];
+  }
 }
 
 function addBillboard(scene, screen) {
@@ -2146,6 +2207,97 @@ function addTraffic(scene) {
   }
 }
 
+// `coffee`: a mug appears between the iMac and the cat and steams for a while.
+function addCoffee(scene) {
+  const mug = new THREE.Group();
+  mug.position.set(0.82, 0, 0.36);
+  mug.visible = false;
+  scene.add(mug);
+  const ceramic = new THREE.MeshStandardMaterial({ color: 0xeeeae2, roughness: 0.35 });
+  const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.065, 0.17, 32, 1, true), ceramic);
+  cup.position.y = 0.085;
+  cup.castShadow = true;
+  const inside = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.068, 0.06, 0.16, 32, 1, true),
+    new THREE.MeshStandardMaterial({ color: 0xd9d4ca, roughness: 0.4, side: THREE.BackSide }),
+  );
+  inside.position.y = 0.09;
+  const bottom = new THREE.Mesh(new THREE.CircleGeometry(0.065, 32), ceramic);
+  bottom.rotation.x = -Math.PI / 2;
+  bottom.position.y = 0.002;
+  const coffee = new THREE.Mesh(
+    new THREE.CircleGeometry(0.066, 32),
+    new THREE.MeshStandardMaterial({ color: 0x3b2314, roughness: 0.2 }),
+  );
+  coffee.rotation.x = -Math.PI / 2;
+  coffee.position.y = 0.15;
+  const handle = new THREE.Mesh(new THREE.TorusGeometry(0.04, 0.011, 10, 24, Math.PI), ceramic);
+  handle.rotation.z = -Math.PI / 2;
+  handle.position.set(0.075, 0.09, 0);
+  const logo = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.07, 0.035),
+    new THREE.MeshBasicMaterial({ map: labelTexture("~$", "#3fa34d", 128, 64, 44), transparent: true }),
+  );
+  logo.position.set(0, 0.09, 0.0755);
+  mug.add(cup, inside, bottom, coffee, handle, logo);
+
+  const steamTex = gradientDot();
+  const puffs = Array.from({ length: 5 }, (_, i) => {
+    const puff = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: steamTex, color: 0xdfe8ff, transparent: true, depthWrite: false, opacity: 0 }),
+    );
+    puff.userData.phase = i / 5;
+    mug.add(puff);
+    return puff;
+  });
+
+  const state = { pop: 0, steam: 0 };
+  document.addEventListener("desk:effect", (event) => {
+    if (event.detail !== "coffee") return;
+    if (!mug.visible) {
+      mug.visible = true;
+      state.pop = 0;
+    }
+    state.steam = 45;
+  });
+  tickers.push((dt, t) => {
+    if (!mug.visible) return;
+    state.pop = Math.min(1, state.pop + dt * 3);
+    mug.scale.setScalar(reduceMotion ? 1 : 0.2 + 0.8 * (1 - (1 - state.pop) ** 3));
+    state.steam = Math.max(0, state.steam - dt);
+    const strength = Math.min(1, state.steam / 5);
+    for (const puff of puffs) {
+      const p = (t * 0.35 * (motion || 0.2) + puff.userData.phase) % 1;
+      puff.position.set(Math.sin(p * 6 + puff.userData.phase * 9) * 0.03, 0.17 + p * 0.35, 0);
+      puff.scale.setScalar(0.05 + p * 0.12);
+      puff.material.opacity = Math.sin(p * Math.PI) * 0.35 * strength;
+    }
+  });
+}
+
+// `party` and the Konami code: neon signs and the desk lamp cycle through colours for a few seconds.
+function addParty() {
+  const white = new THREE.Color(0xffffff);
+  const lampColor = new THREE.Color(0xffd6a0);
+  document.addEventListener("desk:effect", (event) => {
+    if (event.detail === "party") party.left = 8;
+  });
+  tickers.push((dt, t) => {
+    if (party.left <= 0) return;
+    party.left = Math.max(0, party.left - dt);
+    const done = party.left === 0;
+    const speed = reduceMotion ? 0.2 : 1.6;
+    party.signs.forEach((sign, i) => {
+      if (done) sign.material.color.copy(white);
+      else sign.material.color.setHSL((t * speed * 0.3 + i * 0.15) % 1, 1, 0.65);
+    });
+    for (const light of party.lights) {
+      if (done) light.color.copy(lampColor);
+      else light.color.setHSL((t * speed * 0.3 + 0.5) % 1, 1, 0.6);
+    }
+  });
+}
+
 function addSigns(scene, pickables) {
   const group = new THREE.Group();
   scene.add(group);
@@ -2158,9 +2310,11 @@ function addSigns(scene, pickables) {
       baseY: y,
       phase: index * 0.7,
       onHover: (on) => mesh.scale.setScalar(on ? 1.07 : 1),
+      tip: `${title} → ${command}`,
     };
     group.add(mesh);
     pickables.push(mesh);
+    party.signs.push(mesh);
     return mesh;
   });
   let flicker = { sign: null, left: 0, wait: 4 };
@@ -2635,6 +2789,20 @@ function bubbleTexture(text) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(text, 170, 58);
+  const map = new THREE.CanvasTexture(c);
+  map.colorSpace = THREE.SRGBColorSpace;
+  return map;
+}
+
+function gradientDot() {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const ctx = c.getContext("2d");
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, "rgba(255,255,255,0.9)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
   const map = new THREE.CanvasTexture(c);
   map.colorSpace = THREE.SRGBColorSpace;
   return map;

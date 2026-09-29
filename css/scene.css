@@ -335,3 +335,24 @@ body.has-crt .zoom-toggle {
     animation: none;
   }
 }
+
+.desk-tip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 12;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid #314033;
+  border-radius: 8px;
+  background: rgba(4, 8, 10, 0.85);
+  color: var(--fg);
+  font: 0.8rem var(--font);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.desk-tip.on {
+  opacity: 1;
+}

@@ -191,6 +191,15 @@ export function run(raw, state = {}) {
       return rejectExtra(parsed, cwd) ?? petCommand(cwd, parsed.cmd, state);
     case "shop":
       return rejectExtra(parsed, cwd) ?? shopCommand(cwd);
+    // Easter eggs: not listed in help or completion, only hinted at.
+    case "matrix":
+      return finish(cwd, [{ t: "dim", text: "Wake up, Neo… (любая клавиша — выйти)" }], { effect: "matrix" });
+    case "coffee":
+      return finish(cwd, [{ t: "p", text: "Варю кофе. Кружка — на столе справа от монитора." }], { effect: "coffee" });
+    case "party":
+      return finish(cwd, [{ t: "p", text: "🎉 неон на максимум" }], { effect: "party" });
+    case "sudo":
+      return sudoCommand(cwd, parsed.args);
     default:
       return unknown(cwd, parsed);
   }
@@ -278,6 +287,10 @@ function helpBlocks() {
     {
       t: "dim",
       text: `репозитории: ${projects.map((project) => project.id).join(", ")}`,
+    },
+    {
+      t: "dim",
+      text: "в терминале спрятано несколько пасхалок",
     },
   ];
 }
@@ -437,6 +450,26 @@ function shopCommand(cwd) {
   );
 }
 
+function sudoCommand(cwd, args) {
+  const line = args.join(" ").toLowerCase();
+  if (line === "hire renfild" || line === "hire") {
+    return finish(
+      cwd,
+      [
+        { t: "h", text: "[sudo] доступ выдан" },
+        { t: "p", text: "Нанимаю renfild… ██████████ 100%" },
+        { t: "p", text: "Отличный выбор. Напишите в GitHub — обсудим задачу." },
+        ...contactBlocks().slice(1),
+      ],
+      { effect: "party" },
+    );
+  }
+  return finish(cwd, [
+    { t: "err", text: "renfild is not in the sudoers file. This incident will be reported." },
+    { t: "dim", text: "подсказка: sudo hire renfild" },
+  ]);
+}
+
 function soundCommand(cwd, args, current) {
   if (args.length > 1) return finish(cwd, [{ t: "err", text: "sound: лишние аргументы" }]);
   const arg = (args[0] ?? "").toLowerCase();
@@ -532,6 +565,7 @@ function finish(cwd, blocks, extra = {}) {
     pet: extra.pet ?? null,
     petAction: extra.petAction ?? null,
     shop: extra.shop ?? false,
+    effect: extra.effect ?? null,
   };
 }
 

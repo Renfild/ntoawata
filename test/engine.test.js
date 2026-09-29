@@ -237,3 +237,16 @@ test("shop opens the phone demo", () => {
   assert.equal(run("help").shop, false);
   assert.equal(run("shop now").blocks[0].t, "err");
 });
+
+test("easter eggs stay out of help and completion but still run", () => {
+  assert.equal(run("matrix").effect, "matrix");
+  assert.equal(run("coffee").effect, "coffee");
+  assert.equal(run("party").effect, "party");
+  assert.equal(run("sudo hire renfild").effect, "party");
+  assert.match(blocksText(run("sudo hire renfild").blocks), /github\.com\/Renfild/);
+  assert.equal(run("sudo rm -rf /").blocks[0].t, "err");
+  assert.equal(run("help").effect, null);
+  const help = blocksText(run("help").blocks);
+  for (const egg of ["matrix", "coffee", "party", "sudo"]) assert.doesNotMatch(help, new RegExp(`\\b${egg}\\b`));
+  assert.deepEqual(complete("ma").matches, []);
+});

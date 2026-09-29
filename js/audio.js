@@ -39,6 +39,7 @@ export const sound = {
   mouse,
   boot,
   eat,
+  party,
   meow: () => {
     if (live()) meow(ctx.currentTime);
   },
@@ -270,6 +271,20 @@ function eat() {
     src.connect(filter("bandpass", 1800 + Math.random() * 900, 1.2)).connect(envelope(at, 0.22, 0.004, 0.07)).connect(master);
     src.start(at, Math.random() * 2, 0.1);
   }
+}
+
+// A quick rising arpeggio for the party mode.
+function party() {
+  if (!live()) return;
+  const t = ctx.currentTime + 0.02;
+  [523.3, 659.3, 784, 1046.5, 784, 1046.5, 1318.5].forEach((freq, i) => {
+    const osc = ctx.createOscillator();
+    osc.type = "square";
+    osc.frequency.value = freq;
+    osc.connect(filter("lowpass", 3000, 0.7)).connect(envelope(t + i * 0.09, 0.05, 0.005, 0.14)).connect(master);
+    osc.start(t + i * 0.09);
+    osc.stop(t + i * 0.09 + 0.2);
+  });
 }
 
 function chime() {
