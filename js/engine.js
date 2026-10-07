@@ -193,7 +193,11 @@ export function run(raw, state = {}) {
       return rejectExtra(parsed, cwd) ?? shopCommand(cwd);
     // Easter eggs: not listed in help or completion, only hinted at.
     case "matrix":
-      return finish(cwd, [{ t: "dim", text: "Wake up, Neo… (любая клавиша — выйти)" }], { effect: "matrix" });
+      // With reduced motion the rain is not started, so the message must not promise a key to exit it.
+      if (state.reduceMotion) {
+        return finish(cwd, [{ t: "dim", text: "Дождь не запущен: в системе включено «уменьшение анимации»." }]);
+      }
+      return finish(cwd, [{ t: "dim", text: "Проснись, Нео… (любая клавиша — выйти)" }], { effect: "matrix" });
     case "coffee":
       return finish(cwd, [{ t: "p", text: "Варю кофе. Кружка — на столе справа от монитора." }], { effect: "coffee" });
     case "party":
@@ -324,19 +328,23 @@ function historyBlocks(history) {
   }));
 }
 
+function homeListing() {
+  return [
+    { t: "dim", text: "~" },
+    { t: "run", cmd: "ls projects", label: "projects", hint: "репозитории" },
+  ];
+}
+
 function list(cwd, args) {
   if (args.length > 1) return finish(cwd, [{ t: "err", text: "ls: лишние аргументы" }]);
-  if (args.length === 0) {
-    return finish(cwd, [
-      { t: "dim", text: "~" },
-      { t: "run", cmd: "ls projects", label: "projects", hint: "репозитории" },
-    ]);
-  }
+  if (args.length === 0) return finish(cwd, homeListing());
 
   const arg = args[0].trim().toLowerCase().replace(/\\/g, "/").replace(/\/+$/, "").replace(/^\.\//, "");
   if (arg.startsWith("-")) {
     return finish(cwd, [{ t: "err", text: "ls: флаги не поддерживаются. используйте ls projects" }]);
   }
+  // `ls ~` is the home listing, the same as a bare `ls`.
+  if (arg === "~") return finish(cwd, homeListing());
   if (LS_PATHS.has(arg)) return finish(cwd, projectCards());
 
   const project = resolveProject(arg);
@@ -465,7 +473,7 @@ function sudoCommand(cwd, args) {
     );
   }
   return finish(cwd, [
-    { t: "err", text: "renfild is not in the sudoers file. This incident will be reported." },
+    { t: "err", text: "renfild нет в файле sudoers. Инцидент будет зафиксирован." },
     { t: "dim", text: "подсказка: sudo hire renfild" },
   ]);
 }
@@ -482,9 +490,9 @@ function soundCommand(cwd, args, current) {
   return finish(cwd, [{ t: "p", text }], { sound: next });
 }
 
+// Repo rows run the repo list: a bare `open` or `cd` would only print an error or the path.
 function runnable(label) {
-  if (label.startsWith("open")) return "open";
-  if (label.startsWith("cd")) return "cd";
+  if (label.startsWith("open") || label === "cd <repo>") return "ls projects";
   return label;
 }
 

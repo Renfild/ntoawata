@@ -31,6 +31,7 @@ const wideQuery = window.matchMedia("(min-width: 900px) and (min-height: 560px)"
 const desktop = wideQuery.matches;
 const coarse = window.matchMedia("(pointer: coarse)").matches;
 // Ambient motion (rain, cars, breathing) scales by this; direct feedback such as key presses does not.
+// The cat's feed and play reactions keep a small floor under reduced motion, so the action still reads.
 const motion = reduceMotion ? 0 : 1;
 let maxAniso = 8;
 
@@ -48,10 +49,14 @@ const input = document.querySelector("#cmd");
 const form = document.querySelector("#form");
 
 // Opening shot per layout: wide windows put the terminal on the monitor, narrow ones dock it below the scene.
+// The wide shot is framed so the neon sign row sits above the monitor and the keyboard stays in view.
+// AQUA is the exception: the iMac's left edge covers it from this angle, and raising it would collide with RENFILD.
 const HEROES = {
-  wide: { pos: [2.0, 2.3, 4.3], target: [0.05, 0.9, 0.45] },
+  wide: { pos: [1.8, 1.95, 3.92], target: [0.05, 1.15, 0.45] },
   narrow: { pos: [1.8, 2.35, 4.1], target: [0.1, 1.2, 0.3] },
 };
+// Vertical lens of the wide shot. Windows narrower than the 16:10 it was framed for widen it (frameLayout).
+const WIDE_FOV = 46;
 let HERO = desktop ? HEROES.wide : HEROES.narrow;
 const ARRIVE = { pos: [2.9, 2.9, 5.3], target: [0.1, 1.3, -0.2] };
 // The room is only built towards the window: keep the free camera in the arc that shows it.
@@ -95,14 +100,15 @@ const KEY_ROWS = [
   ],
 ];
 
+// Heights keep every sign inside the frame of the wide opening shot.
 const SIGNS = [
-  ["RENFILD", "whoami", "#ff4fd8", -2.35, 2.55, -2.15],
-  ["AQUA", "open aquateche", "#49e7ff", -2.35, 1.85, -2.05],
-  ["RAG", "open pcai", "#7CFF6B", -1.15, 2.85, -2.35],
-  ["FISH", "open fisherman", "#ff9a3d", 0.15, 3.3, -2.4],
-  ["SHOP", "open tgbotshop", "#ffc14a", 1.35, 2.7, -2.3],
-  ["PET", "open tamagotchi-bot", "#d9a0ff", 2.35, 2.15, -2.1],
-  ["GIT", "contact", "#d7f6ff", 2.35, 1.5, -2.05],
+  ["RENFILD", "whoami", "#ff4fd8", -2.35, 2.45, -2.15],
+  ["AQUA", "open aquateche", "#49e7ff", -2.35, 1.5, -2.05],
+  ["RAG", "open pcai", "#7CFF6B", -1.15, 2.5, -2.35],
+  ["FISH", "open fisherman", "#ff9a3d", 0.15, 2.95, -2.4],
+  ["SHOP", "open tgbotshop", "#ffc14a", 1.35, 2.35, -2.3],
+  ["PET", "open tamagotchi-bot", "#d9a0ff", 2.35, 1.8, -2.1],
+  ["GIT", "contact", "#d7f6ff", 2.35, 1.15, -2.05],
 ];
 
 function boot() {
@@ -110,7 +116,8 @@ function boot() {
   try {
     renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: true,
+      // Antialiasing lives on the composer's target below; the canvas only receives the final quad.
+      antialias: false,
       alpha: false,
       powerPreference: "high-performance",
     });
@@ -133,7 +140,7 @@ function boot() {
   scene.background = new THREE.Color(0x05060f);
   scene.fog = new THREE.FogExp2(0x120c22, 0.026);
 
-  const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.08, 60);
+  const camera = new THREE.PerspectiveCamera(WIDE_FOV, window.innerWidth / window.innerHeight, 0.08, 60);
   const intro = desktop && !reduceMotion;
   camera.position.set(...(intro ? ARRIVE.pos : HERO.pos));
 
@@ -146,7 +153,17 @@ function boot() {
   Object.assign(controls, intro ? FREE : LIMITS);
   controls.update();
 
-  const composer = new EffectComposer(renderer);
+  // The scene is drawn into the composer's target, so that target gets the multisampling (phones skip it).
+  // The neon materials' toneMapped:false is inert here: a render target switches per-material tone
+  // mapping off, and OutputPass applies ACES to the whole frame instead.
+  const sceneTarget = new THREE.WebGLRenderTarget(
+    window.innerWidth * renderer.getPixelRatio(),
+    window.innerHeight * renderer.getPixelRatio(),
+    { type: THREE.HalfFloatType, samples: coarse ? 0 : 4 },
+  );
+  const composer = new EffectComposer(renderer, sceneTarget);
+  // A custom target reports device pixels, and addPass scales by the pixel ratio again: size it in CSS pixels first.
+  composer.setSize(window.innerWidth, window.innerHeight);
   composer.addPass(new RenderPass(scene, camera));
   const bloom = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
@@ -261,6 +278,7 @@ function boot() {
     document.body.classList.toggle("is-zoomed", Boolean(name));
     document.dispatchEvent(new CustomEvent("desk:zoomed", { detail: Boolean(name) }));
     if (zoomButton) {
+      // While zoomed the label names what the button does now, with the Esc hint; aria-pressed carries the state.
       zoomButton.setAttribute("aria-pressed", String(Boolean(name)));
       zoomButton.querySelector(".zoom-label").textContent = name ? "Esc — отдалить" : "приблизить экран";
     }
@@ -375,8 +393,6 @@ function boot() {
     flyTo(new THREE.Vector3(...HERO.pos), new THREE.Vector3(...HERO.target), 0.9);
   });
 
-  // Narrow layout docks the terminal over the lower 68% of the page. Shift the projection so the
-  // desk sits in the middle of the strip left above it, and widen the lens so the whole desk fits.
   // Narrow layouts dock the terminal over part of the page. Shift the projection so the desk sits in
   // the middle of whatever is left for it, and widen the lens when that area is small.
   document.addEventListener("desk:dock", (event) => {
@@ -389,7 +405,9 @@ function boot() {
     const h = window.innerHeight;
     camera.clearViewOffset();
     if (isWide) {
-      camera.fov = 38;
+      // Narrower windows widen the lens by the same ratio, so the sign row at both ends stays in frame.
+      const widen = Math.max(1, 1.6 / (w / h));
+      camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(WIDE_FOV / 2)) * widen));
     } else if (h <= 520 && w > h) {
       // Landscape phone: the terminal takes the right 58%, the desk the left 42%.
       camera.fov = 58;
@@ -400,7 +418,9 @@ function boot() {
       const share = 1 - dockShare;
       // A tall portrait strip has little horizontal view; a wider lens keeps the phone and the cat in frame.
       camera.fov = share < 0.45 ? 68 : 72;
-      camera.setViewOffset(w, h, 0, h * (0.5 - share / 2), w, h);
+      // In the short strip, lift the desk so the monitor's top edge clears the top of the page. The sign row is still cut there.
+      const lift = share < 0.45 ? h * 0.07 : 0;
+      camera.setViewOffset(w, h, 0, h * (0.5 - share / 2) - lift, w, h);
     }
     camera.updateProjectionMatrix();
   }
@@ -446,6 +466,8 @@ function boot() {
     cssScene.add(crtObject);
     phoneEl.classList.remove("is-sheet", "is-open");
     phoneEl.classList.add("is-3d");
+    // A sheet that was open is no longer modal once the phone sits in the 3D scene.
+    phoneEl.removeAttribute("aria-modal");
     phoneObject = new CSS3DObject(phoneEl);
     cssScene.add(phoneObject);
     anchor.updateWorldMatrix(true, false);
@@ -731,7 +753,8 @@ function addSky(scene) {
 }
 
 function addRoom(scene) {
-  const wall = new THREE.MeshStandardMaterial({ map: plasterTexture(), color: 0x2a2d3a, roughness: 0.95, metalness: 0 });
+  // A touch lighter than before: the left wall only catches ambient and hemisphere light, and read as near-black.
+  const wall = new THREE.MeshStandardMaterial({ map: plasterTexture(), color: 0x31354a, roughness: 0.95, metalness: 0 });
   const z = -1.95;
   const t = 0.2;
   const open = { left: -3.1, right: 3.1, bottom: 0.35, top: 3.85 };
@@ -1135,10 +1158,11 @@ function addKeyboard(scene, pickables) {
 
   const width = 15 * KEY_U + 0.08;
   const depth = 5 * KEY_U + 0.08;
+  // Rougher than the metal it looks like: the lamp's spot otherwise peaks into a white band along the front edge.
   const shell = new THREE.MeshStandardMaterial({
     map: brushedTexture(),
     color: 0x7a818c,
-    roughness: 0.42,
+    roughness: 0.52,
     metalness: 0.7,
   });
   const tray = new THREE.Mesh(new RoundedBoxGeometry(width, 0.05, depth, 3, 0.016), shell);
@@ -1752,8 +1776,9 @@ function addCat(scene, pickables) {
     if (state.heart < 1) {
       state.heart = Math.min(1, state.heart + dt / 1.4);
       heart.visible = true;
-      heart.position.set(0.18, 0.36 + state.heart * 0.22, 0.08);
-      heart.scale.setScalar(0.08 + state.heart * 0.04);
+      // Under reduced motion the heart fades in place instead of floating up.
+      heart.position.set(0.18, 0.36 + (reduceMotion ? 0.11 : state.heart * 0.22), 0.08);
+      heart.scale.setScalar(reduceMotion ? 0.1 : 0.08 + state.heart * 0.04);
       heart.material.opacity = Math.sin(state.heart * Math.PI);
     } else {
       heart.visible = false;
@@ -2028,6 +2053,8 @@ function adScreen() {
     if (!commits.length) return;
     words = commits.map((c) => `${c.repo}: ${c.message} ▸ `).join("");
     caption = "live · последние коммиты на GitHub";
+    // Without the ticker (reduced motion) nothing else redraws the canvas, so paint the commits once.
+    if (!motion) draw(0);
   });
   const draw = (t) => {
     const hue = (t * 18) % 360;
@@ -2053,7 +2080,8 @@ function adScreen() {
   tickers.push((dt, t) => {
     if (!motion) return;
     acc += dt;
-    if (acc < 1 / 24) return;
+    // About 15 redraws a second: the feed scrolls slowly, and the billboard is often off-screen.
+    if (acc < 1 / 15) return;
     acc = 0;
     draw(t);
   });
@@ -2237,7 +2265,8 @@ function addCoffee(scene) {
       mug.visible = true;
       state.pop = 0;
     }
-    state.steam = 45;
+    // Under reduced motion the steam hangs still for a shorter while instead of drifting.
+    state.steam = reduceMotion ? 15 : 45;
   });
   tickers.push((dt, t) => {
     if (!mug.visible) return;
@@ -2246,7 +2275,7 @@ function addCoffee(scene) {
     state.steam = Math.max(0, state.steam - dt);
     const strength = Math.min(1, state.steam / 5);
     for (const puff of puffs) {
-      const p = (t * 0.35 * (motion || 0.2) + puff.userData.phase) % 1;
+      const p = (t * 0.35 * motion + puff.userData.phase) % 1;
       puff.position.set(Math.sin(p * 6 + puff.userData.phase * 9) * 0.03, 0.17 + p * 0.35, 0);
       puff.scale.setScalar(0.05 + p * 0.12);
       puff.material.opacity = Math.sin(p * Math.PI) * 0.35 * strength;

@@ -24,6 +24,12 @@ const CHIPS = [
   ["open tamagotchi-bot", "open tamagotchi-bot", "repo"],
   ["open fisherman", "open fisherman", "repo"],
 ];
+// Phones have no Tab or arrow keys, so the same actions lead the chip row there.
+const TOUCH_KEYS = [
+  ["Tab", "дополнить команду", "complete"],
+  ["↑", "предыдущая команда", "up"],
+  ["↓", "следующая команда", "down"],
+];
 
 const output = document.querySelector("#output");
 const form = document.querySelector("#form");
@@ -76,6 +82,17 @@ startBoot({
 });
 
 function buildChips() {
+  if (window.matchMedia("(pointer: coarse)").matches) {
+    for (const [label, aria, key] of TOUCH_KEYS) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "chip";
+      button.dataset.key = key;
+      button.textContent = label;
+      button.setAttribute("aria-label", aria);
+      quick.append(button);
+    }
+  }
   for (const [command, label, kind] of CHIPS) {
     const button = document.createElement("button");
     button.type = "button";
@@ -107,8 +124,8 @@ function bindDesk() {
 // Narrow layout: lower the terminal to give the desk most of the screen, or raise it back.
 function setDockLow(low) {
   document.body.classList.toggle("dock-low", low);
+  // The label stays "стол" so it always names the same thing; pressed and the arrow show the state.
   dockToggle.setAttribute("aria-pressed", String(low));
-  dockToggle.querySelector(".dock-label").textContent = low ? "терминал" : "стол";
   dockToggle.querySelector(".dock-arrow").textContent = low ? "▾" : "▴";
   announceDock();
   if (!low) scrollOutput("bottom");
@@ -125,11 +142,13 @@ function openShop() {
   // The desk takes it when the phone is on screen in 3D; otherwise show the app as a sheet.
   if (event.defaultPrevented) return;
   phone.classList.add("is-open");
+  phone.setAttribute("aria-modal", "true");
   phone.querySelector("button")?.focus({ preventScroll: true });
 }
 
 function closeShop() {
   phone.classList.remove("is-open");
+  phone.removeAttribute("aria-modal");
   if (!window.matchMedia("(pointer: coarse)").matches) input.focus({ preventScroll: true });
 }
 
@@ -261,9 +280,21 @@ function bindInput() {
   });
 
   document.addEventListener("click", (event) => {
+    // Scoped to the chip row: the phone's own buttons also carry data-act, not data-key.
+    const key = event.target.closest("#quick [data-key]");
+    if (key) {
+      touchKey(key.dataset.key);
+      return;
+    }
     const button = event.target.closest("[data-cmd]");
     if (!button) return;
     execute(button.dataset.cmd);
+  });
+
+  // The skip link moves focus to the field without touching the hash, so an open case stays open.
+  document.querySelector(".skip")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    input.focus({ preventScroll: true });
   });
 
   document.addEventListener("desk:zoomed", (event) => {
@@ -293,6 +324,8 @@ function bindInput() {
     if (event.target === input || event.defaultPrevented) return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.key.length !== 1 && event.key !== "Backspace") return;
+    // While the phone sheet is open its keys belong to it, not to the terminal behind it.
+    if (phone.classList.contains("is-open")) return;
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest("input, textarea, select, [contenteditable]")) return;
     if (event.key === " " && target?.closest("button, a")) return;
@@ -301,6 +334,9 @@ function bindInput() {
 
   window.addEventListener("hashchange", () => {
     const project = projectFromHash();
+    // In-page anchors such as #cmd are not projects, so they must not close the open case.
+    // Project aliases can name an element too (#shop is the phone), so only non-projects are skipped.
+    if (!project && document.getElementById(window.location.hash.slice(1))) return;
     if (project && session.cwd !== project.id) {
       execute(`open ${project.id}`, { record: false, hash: false });
     } else if (!project && session.cwd) {
@@ -376,7 +412,10 @@ function onKeyDown(event) {
 
 function closeFromEscape() {
   if (phone.classList.contains("is-open")) {
-    closeShop();
+    // The first Esc only dismisses the size picker inside the phone; the next one closes the phone.
+    const cancel = phone.querySelector('[data-act="size-cancel"]');
+    if (cancel) cancel.click();
+    else closeShop();
     return;
   }
   if (session.cwd) {
@@ -388,6 +427,19 @@ function closeFromEscape() {
     lastTab = null;
     paint();
   }
+}
+
+// The chips on phones do what the keys do, then hand the cursor back to the field.
+function touchKey(name) {
+  if (name === "complete") {
+    onTab();
+  } else {
+    input.value = name === "up" ? session.history.up(input.value) : session.history.down(input.value);
+    moveCaretToEnd();
+    lastTab = null;
+    paint();
+  }
+  input.focus({ preventScroll: true });
 }
 
 function onTab() {
@@ -432,6 +484,7 @@ function execute(raw, options = {}) {
     sound: sound.enabled,
     pet: session.pet,
     now: Date.now(),
+    reduceMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   });
   session.cwd = result.state.cwd;
   if (result.sound !== null) sound.set(result.sound);

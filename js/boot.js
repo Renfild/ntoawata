@@ -15,9 +15,15 @@ export function startBoot({ onDone, onPower }) {
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const log = overlay.querySelector(".boot-log");
   const fill = overlay.querySelector(".boot-fill");
+  const skip = overlay.querySelector(".boot-skip");
   let phase = "off";
   let timers = [];
   document.body.classList.add("is-off");
+  // Phones have no Esc key or keyboard, so the hints name a tap there.
+  const coarse = window.matchMedia("(pointer: coarse)").matches;
+  if (skip && coarse) skip.textContent = "нажмите, чтобы пропустить";
+  const powerHint = overlay.querySelector(".boot-power small");
+  if (powerHint && coarse) powerHint.textContent = "или коснитесь экрана";
 
   const lines = [
     ["", `RENFILD OS 26.9 · ${profile.snapshotLabel}`],
@@ -31,7 +37,8 @@ export function startBoot({ onDone, onPower }) {
     ["", "запуск терминала…"],
   ];
 
-  overlay.addEventListener("click", () => power());
+  // A tap powers the screen on, and a second tap during the boot log skips it.
+  overlay.addEventListener("click", () => (phase === "booting" ? finish() : power()));
   document.addEventListener("desk:power", () => power());
   window.addEventListener("keydown", onKey, true);
 
