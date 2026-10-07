@@ -7,6 +7,7 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { sound } from "./audio.js";
+import { loadLatestCommits } from "./commits.js";
 
 const CRT_W = 1120;
 const CRT_H = 630;
@@ -2023,7 +2024,7 @@ function adScreen() {
   let caption = "github.com/Renfild";
   let acc = 1;
   // Swap the slogan for the latest public commits when GitHub answers; keep the slogan otherwise.
-  latestCommits().then((commits) => {
+  loadLatestCommits().then((commits) => {
     if (!commits.length) return;
     words = commits.map((c) => `${c.repo}: ${c.message} ▸ `).join("");
     caption = "live · последние коммиты на GitHub";
@@ -2057,28 +2058,6 @@ function adScreen() {
     draw(t);
   });
   return texture;
-}
-
-async function latestCommits() {
-  try {
-    const response = await fetch("https://api.github.com/users/Renfild/events/public?per_page=40", {
-      headers: { Accept: "application/vnd.github+json" },
-    });
-    if (!response.ok) return [];
-    const events = await response.json();
-    const commits = [];
-    for (const event of events) {
-      if (event.type !== "PushEvent") continue;
-      const repo = String(event.repo?.name ?? "").split("/").pop();
-      for (const commit of event.payload?.commits ?? []) {
-        const message = String(commit.message ?? "").split("\n")[0].trim();
-        if (message) commits.push({ repo, message: message.length > 46 ? `${message.slice(0, 45)}…` : message });
-      }
-    }
-    return commits.slice(0, 6);
-  } catch {
-    return [];
-  }
 }
 
 function addBillboard(scene, screen) {
