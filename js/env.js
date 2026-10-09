@@ -15,7 +15,7 @@ const ENV = {
   horizon: [0.2, 0.05, 0.22],
   floor: [0.025, 0.017, 0.012],
   haze: { top: [0.1, 0.045, 0.26], bottom: [0.34, 0.11, 0.2] },
-  neon: 3.2,
+  neon: 2.4,
   strip: 1.3,
   cyanWall: 0.5,
   pinkWall: 0.45,
@@ -86,7 +86,8 @@ export function buildEnvironment(renderer, signs = []) {
 
   // The violet strip along the top of the window and the cyan one under the sill.
   const violet = new THREE.Color(0x7a2cff).multiplyScalar(ENV.strip);
-  const cyan = new THREE.Color(0x49e7ff).multiplyScalar(ENV.strip);
+  // Paler than the real strip: a saturated cyan turns flat aluminium plates (the iMac stand) a hard mint green.
+  const cyan = new THREE.Color(0x9fe6ff).multiplyScalar(ENV.strip * 0.7);
   const stripTop = gradientPanel(30, 0.5, [violet.r, violet.g, violet.b], [violet.r, violet.g, violet.b]);
   scene.add(place(stripTop, new THREE.Vector3(0, 1.45, -1.2)));
   const stripLow = gradientPanel(28, 0.4, [cyan.r, cyan.g, cyan.b], [cyan.r, cyan.g, cyan.b]);

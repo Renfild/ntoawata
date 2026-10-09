@@ -70,9 +70,12 @@ const input = document.querySelector("#cmd");
 const form = document.querySelector("#form");
 
 // Opening shot per layout: wide windows put the terminal on the monitor, narrow ones dock it below the scene.
-// The wide shot is framed so the neon sign row sits above the monitor and the keyboard stays in view.
+// The wide pose was found by projecting the corners of every sign, the lamp, the phone, the mouse and the cat
+// through a 46 degree lens at 16:10: the whole set stays inside the frame with about 6% to spare, nothing
+// hides behind the iMac, and it keeps the three-quarter view (about 23 degrees off the axis) that gives depth.
+// Move a sign or the desk contents and the pose needs checking again.
 const HEROES = {
-  wide: { pos: [1.8, 1.95, 3.92], target: [0.05, 1.15, 0.45] },
+  wide: { pos: [2.04, 1.96, 4.04], target: [0.53, 1.02, 0.48] },
   narrow: { pos: [1.8, 2.35, 4.1], target: [0.1, 1.2, 0.3] },
 };
 // Vertical lens of the wide shot. Windows narrower than the 16:10 it was framed for widen it (frameLayout).
@@ -122,16 +125,17 @@ const KEY_ROWS = [
   ],
 ];
 
-// Positions keep every sign inside the frame of the wide opening shot and clear of the iMac, which covers the
-// window's left column from there: AQUA hangs under SHOP, on the right of the monitor, with PET and GIT beside it.
+// Laid out for the wide opening shot at 16:10 and wider: all seven signs stay inside the frame, clear of the iMac
+// (which covers the window's left column from there) and of the window's own bars (a horizontal one at y = 2.95,
+// a vertical one at x = 0), so none of them is cut in half. AQUA hangs under SHOP on the right of the monitor.
 const SIGNS = [
   ["RENFILD", "whoami", "#ff4fd8", -2.35, 2.45, -2.15],
-  ["AQUA", "open aquateche", "#49e7ff", 1.35, 1.3, -2.3],
+  ["AQUA", "open aquateche", "#49e7ff", 1.45, 1.28, -2.3],
   ["RAG", "open pcai", "#7CFF6B", -1.15, 2.5, -2.35],
-  ["FISH", "open fisherman", "#ff9a3d", 0.15, 2.95, -2.4],
-  ["SHOP", "open tgbotshop", "#ffc14a", 1.35, 2.35, -2.3],
-  ["PET", "open tamagotchi-bot", "#d9a0ff", 2.45, 1.8, -2.1],
-  ["GIT", "contact", "#d7f6ff", 2.45, 1.15, -2.05],
+  ["FISH", "open fisherman", "#ff9a3d", 0.62, 2.62, -2.4],
+  ["SHOP", "open tgbotshop", "#ffc14a", 1.75, 2.2, -2.3],
+  ["PET", "open tamagotchi-bot", "#d9a0ff", 2.5, 1.7, -2.1],
+  ["GIT", "contact", "#d7f6ff", 2.5, 1.1, -2.05],
 ];
 
 function boot() {
@@ -915,6 +919,30 @@ function addRoom(scene) {
   wash.position.set(0, open.top - 0.1, z + 0.6);
   scene.add(wash);
 
+  // The neon throws colour on the side walls, which are too far from any light to show it: a soft additive
+  // patch per wall, brightest at the window end. Cheaper than a light, and exactly where it is wanted.
+  const spill = haloTexture();
+  for (const [x, color, turn] of [
+    [room.left + 0.105, 0x49e7ff, Math.PI / 2],
+    [room.right - 0.105, 0xff4fd8, -Math.PI / 2],
+  ]) {
+    const patch = new THREE.Mesh(
+      new THREE.PlaneGeometry(6.4, 3.6),
+      new THREE.MeshBasicMaterial({
+        map: spill,
+        color,
+        transparent: true,
+        opacity: 0.16,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    patch.rotation.y = turn;
+    patch.position.set(x, 1.9, z + 0.35);
+    scene.add(patch);
+  }
+
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(20, 12),
     new THREE.MeshStandardMaterial({ color: 0x0c0d12, roughness: 0.8 }),
@@ -968,7 +996,7 @@ function addMac(scene, pickables) {
   const back = shiny(new THREE.MeshStandardMaterial({ color: 0x4f78b0, roughness: 0.32, metalness: 0.65 }), 0.8);
   const chin = shiny(new THREE.MeshStandardMaterial({ color: 0xb9cff0, roughness: 0.4, metalness: 0.3 }), 0.4);
   const bezel = shiny(new THREE.MeshStandardMaterial({ color: 0xeef1f4, roughness: 0.3, metalness: 0.05 }), 0.3);
-  const alu = shiny(new THREE.MeshStandardMaterial({ map: brushedTexture(), color: 0x9fb6d4, roughness: 0.3, metalness: 0.85 }), 0.4);
+  const alu = shiny(new THREE.MeshStandardMaterial({ map: brushedTexture(), color: 0x9fb6d4, roughness: 0.3, metalness: 0.85 }), 0.25);
 
   const body = new THREE.Mesh(new RoundedBoxGeometry(W, H, D, 4, 0.024), back);
   body.position.set(0, cy, 0);
@@ -2562,6 +2590,8 @@ function addSigns(scene, pickables) {
   });
 }
 
+// Traffic between the towers. Twelve cars share five instanced meshes (body, cabin, two lights, light trail)
+// instead of owning five meshes each; their matrices are rewritten while they drive.
 function addCars(scene) {
   const rand = seeded(5);
   const lanes = [
@@ -2572,50 +2602,94 @@ function addCars(scene) {
     { y: 2.6, z: -10, dir: 1, speed: 0.9 },
     { y: 5.2, z: -12, dir: -1, speed: 1.1 },
   ];
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x151a22, roughness: 0.35, metalness: 0.7 });
-  const cabinMat = new THREE.MeshStandardMaterial({ color: 0x0a1420, emissive: 0x2a6aa8, emissiveIntensity: 0.6, roughness: 0.2 });
-  const head = new THREE.MeshBasicMaterial({ color: 0xfff4dc, toneMapped: false });
-  const tail = new THREE.MeshBasicMaterial({ color: 0xff2b4a, toneMapped: false });
-  const trailTex = gradientTexture(true);
   const cars = [];
   for (const lane of lanes) {
     for (let n = 0; n < 2; n += 1) {
-      const car = new THREE.Group();
-      const body = new THREE.Mesh(new RoundedBoxGeometry(0.62, 0.12, 0.26, 2, 0.04), bodyMat);
-      const cabin = new THREE.Mesh(new RoundedBoxGeometry(0.3, 0.08, 0.2, 2, 0.03), cabinMat);
-      cabin.position.set(-0.03 * lane.dir, 0.08, 0);
-      const front = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.2), head);
-      front.position.set(0.31 * lane.dir, 0, 0);
-      const back = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.035, 0.22), tail);
-      back.position.set(-0.31 * lane.dir, 0.01, 0);
-      const trail = new THREE.Mesh(
-        new THREE.PlaneGeometry(1.4, 0.035),
-        new THREE.MeshBasicMaterial({
-          color: 0xff2b4a,
-          map: trailTex,
-          transparent: true,
-          blending: THREE.AdditiveBlending,
-          depthWrite: false,
-          toneMapped: false,
-        }),
-      );
-      trail.position.set(-1.0 * lane.dir, 0.01, 0);
-      if (lane.dir < 0) trail.rotation.z = Math.PI;
-      car.add(body, cabin, front, back, trail);
-      car.position.set(-14 + rand() * 28, lane.y, lane.z);
-      car.userData = { ...lane, baseY: lane.y, speed: lane.speed * (0.8 + rand() * 0.4), phase: rand() * 6 };
-      scene.add(car);
-      cars.push(car);
+      cars.push({
+        x: -14 + rand() * 28,
+        y: lane.y,
+        z: lane.z,
+        dir: lane.dir,
+        baseY: lane.y,
+        speed: lane.speed * (0.8 + rand() * 0.4),
+        phase: rand() * 6,
+      });
     }
   }
+
+  const trailTexture = gradientTexture(true);
+  // Offsets are in the car's own frame and flip with its direction of travel.
+  const parts = [
+    {
+      geometry: new RoundedBoxGeometry(0.62, 0.12, 0.26, 2, 0.04),
+      material: new THREE.MeshStandardMaterial({ color: 0x151a22, roughness: 0.35, metalness: 0.7 }),
+      offset: () => [0, 0, 0],
+    },
+    {
+      geometry: new RoundedBoxGeometry(0.3, 0.08, 0.2, 2, 0.03),
+      material: new THREE.MeshStandardMaterial({ color: 0x0a1420, emissive: 0x2a6aa8, emissiveIntensity: 0.6, roughness: 0.2 }),
+      offset: (dir) => [-0.03 * dir, 0.08, 0],
+    },
+    {
+      geometry: new THREE.BoxGeometry(0.03, 0.03, 0.2),
+      material: new THREE.MeshBasicMaterial({ color: 0xfff4dc, toneMapped: false }),
+      offset: (dir) => [0.31 * dir, 0, 0],
+    },
+    {
+      geometry: new THREE.BoxGeometry(0.03, 0.035, 0.22),
+      material: new THREE.MeshBasicMaterial({ color: 0xff2b4a, toneMapped: false }),
+      offset: (dir) => [-0.31 * dir, 0.01, 0],
+    },
+    {
+      geometry: new THREE.PlaneGeometry(1.4, 0.035),
+      material: new THREE.MeshBasicMaterial({
+        color: 0xff2b4a,
+        map: trailTexture,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+      offset: (dir) => [-1.0 * dir, 0.01, 0],
+      // The gradient fades away from the car: cars driving left turn the strip around.
+      turnsAround: true,
+    },
+  ].map((part) => {
+    const mesh = new THREE.InstancedMesh(part.geometry, part.material, cars.length);
+    // The cars sweep across the whole window and past it, far beyond the bounds of any one instance.
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+    return { ...part, mesh };
+  });
+
+  const matrix = new THREE.Matrix4();
+  const position = new THREE.Vector3();
+  const straight = new THREE.Quaternion();
+  const turned = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI);
+  const unit = new THREE.Vector3(1, 1, 1);
+  function place() {
+    cars.forEach((car, i) => {
+      for (const part of parts) {
+        const [ox, oy, oz] = part.offset(car.dir);
+        position.set(car.x + ox, car.y + oy, car.z + oz);
+        matrix.compose(position, part.turnsAround && car.dir < 0 ? turned : straight, unit);
+        part.mesh.setMatrixAt(i, matrix);
+      }
+    });
+    for (const part of parts) part.mesh.instanceMatrix.needsUpdate = true;
+  }
+  place();
+
   tickers.push((dt, t) => {
+    // Under reduced motion the traffic stands where it was placed.
+    if (!motion) return;
     for (const car of cars) {
-      const data = car.userData;
-      car.position.x += data.dir * data.speed * dt * motion;
-      car.position.y = data.baseY + Math.sin(t * 1.4 + data.phase) * 0.05 * motion;
-      if (car.position.x > 14) car.position.x = -14;
-      if (car.position.x < -14) car.position.x = 14;
+      car.x += car.dir * car.speed * dt;
+      car.y = car.baseY + Math.sin(t * 1.4 + car.phase) * 0.05;
+      if (car.x > 14) car.x = -14;
+      if (car.x < -14) car.x = 14;
     }
+    place();
   });
 }
 
