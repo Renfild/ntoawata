@@ -10,6 +10,9 @@ import { sound } from "./audio.js";
 import { loadLatestCommits } from "./commits.js";
 import { buildEnvironment } from "./env.js";
 import { createFinishPass } from "./finish.js";
+import { mergeBuffers } from "./merge.js";
+import { createGovernor, pinnedPixelRatio, pixelRatioSteps } from "./quality.js";
+import { createGlassDrops, createGlassHaze, createRain, setRainViewport } from "./rain.js";
 
 const CRT_W = 1120;
 const CRT_H = 630;
@@ -39,8 +42,11 @@ let maxAniso = 8;
 // Filtered reflections of the neon window (see env.js). Only the materials that opt in through shiny() use it,
 // so the walls, the city and the wood keep the moody lights-only look.
 let envMap = null;
+const shinies = [];
 
 function shiny(material, intensity = 1) {
+  // Remembered even without a map, so a context that comes back can bake one and hand it to every material.
+  shinies.push([material, intensity]);
   if (envMap) {
     material.envMap = envMap;
     material.envMapIntensity = intensity;
@@ -55,6 +61,8 @@ const party = { left: 0, signs: [], lights: [] };
 const keyByCode = new Map();
 const keyMeshes = [];
 const legendCache = new Map();
+let legendPlane = null;
+const keycapCache = new Map();
 
 const canvas = document.querySelector("#webgl");
 const crt = document.querySelector("#crt");
@@ -63,13 +71,14 @@ const form = document.querySelector("#form");
 
 // Opening shot per layout: wide windows put the terminal on the monitor, narrow ones dock it below the scene.
 // The wide shot is framed so the neon sign row sits above the monitor and the keyboard stays in view.
-// AQUA is the exception: the iMac's left edge covers it from this angle, and raising it would collide with RENFILD.
 const HEROES = {
   wide: { pos: [1.8, 1.95, 3.92], target: [0.05, 1.15, 0.45] },
   narrow: { pos: [1.8, 2.35, 4.1], target: [0.1, 1.2, 0.3] },
 };
 // Vertical lens of the wide shot. Windows narrower than the 16:10 it was framed for widen it (frameLayout).
 const WIDE_FOV = 46;
+// How much of its colour a neon sign throws around itself.
+const HALO_OPACITY = 0.2;
 let HERO = desktop ? HEROES.wide : HEROES.narrow;
 const ARRIVE = { pos: [2.9, 2.9, 5.3], target: [0.1, 1.3, -0.2] };
 // The room is only built towards the window: keep the free camera in the arc that shows it.
@@ -113,15 +122,16 @@ const KEY_ROWS = [
   ],
 ];
 
-// Heights keep every sign inside the frame of the wide opening shot.
+// Positions keep every sign inside the frame of the wide opening shot and clear of the iMac, which covers the
+// window's left column from there: AQUA hangs under SHOP, on the right of the monitor, with PET and GIT beside it.
 const SIGNS = [
   ["RENFILD", "whoami", "#ff4fd8", -2.35, 2.45, -2.15],
-  ["AQUA", "open aquateche", "#49e7ff", -2.35, 1.5, -2.05],
+  ["AQUA", "open aquateche", "#49e7ff", 1.35, 1.3, -2.3],
   ["RAG", "open pcai", "#7CFF6B", -1.15, 2.5, -2.35],
   ["FISH", "open fisherman", "#ff9a3d", 0.15, 2.95, -2.4],
   ["SHOP", "open tgbotshop", "#ffc14a", 1.35, 2.35, -2.3],
-  ["PET", "open tamagotchi-bot", "#d9a0ff", 2.35, 1.8, -2.1],
-  ["GIT", "contact", "#d7f6ff", 2.35, 1.15, -2.05],
+  ["PET", "open tamagotchi-bot", "#d9a0ff", 2.45, 1.8, -2.1],
+  ["GIT", "contact", "#d7f6ff", 2.45, 1.15, -2.05],
 ];
 
 function boot() {
@@ -139,19 +149,32 @@ function boot() {
   }
   if (!renderer.getContext()) return;
 
-  // Phones have dense screens and small GPUs: render below native resolution there.
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, coarse ? 1.25 : 1.5));
+  // Phones have dense screens and small GPUs: render below native resolution there. Within that cap the
+  // resolution follows how long frames really take (quality.js); ?q=high|medium|low pins it instead.
+  const maxRatio = Math.min(window.devicePixelRatio || 1, coarse ? 1.25 : 1.5);
+  const pinned = pinnedPixelRatio(window.location.search, maxRatio);
+  const governor = pinned === null ? createGovernor({ steps: pixelRatioSteps(maxRatio) }) : null;
+  renderer.setPixelRatio(pinned ?? maxRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
+  setRainViewport(renderer.domElement.height);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
   renderer.setClearColor(0x05060f, 1);
   maxAniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-  envMap = buildEnvironment(
-    renderer,
-    SIGNS.map(([, , color, x, y, z]) => ({ color, position: [x, y, z] })),
-  );
+  const signLights = SIGNS.map(([, , color, x, y, z]) => ({ color, position: [x, y, z] }));
+  envMap = buildEnvironment(renderer, signLights);
+  // Render targets lose their contents with the GL context, and three.js cannot redraw the baked reflections:
+  // bake them again and hand the new map to every material that uses one.
+  canvas.addEventListener("webglcontextrestored", () => {
+    envMap = buildEnvironment(renderer, signLights);
+    for (const [material, intensity] of shinies) {
+      material.envMap = envMap;
+      material.envMapIntensity = intensity;
+      material.needsUpdate = true;
+    }
+  });
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x05060f);
@@ -252,6 +275,7 @@ function boot() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    setRainViewport(renderer.domElement.height);
     composer.setSize(window.innerWidth, window.innerHeight);
     cssRenderer?.setSize(window.innerWidth, window.innerHeight);
     frameLayout(wideQuery.matches);
@@ -359,7 +383,21 @@ function boot() {
     });
   }
 
+  function setQuality(ratio) {
+    renderer.setPixelRatio(ratio);
+    composer.setPixelRatio(ratio);
+    setRainViewport(renderer.domElement.height);
+  }
+
+  let lastFrame = performance.now();
+  let frames = 0;
   renderer.setAnimationLoop(() => {
+    const now = performance.now();
+    // The first second is shader compiles and texture uploads, not a fair measure of the scene.
+    frames += 1;
+    const next = governor && frames > 60 ? governor.sample(now - lastFrame, now) : null;
+    lastFrame = now;
+    if (next !== null) setQuality(next);
     // Clamp so a backgrounded tab does not teleport cars and rain when it resumes.
     const dt = Math.min(clock.getDelta(), 0.1);
     const elapsed = clock.elapsedTime;
@@ -840,13 +878,25 @@ function addRoom(scene) {
     }),
   );
   glass.position.set(0, (open.top + open.bottom) / 2, z - 0.02);
+  // Layers on the window draw back to front: rain (1) < glass and haze (2) < beads (3) < running drops (4).
+  glass.renderOrder = 2;
   scene.add(glass);
   const drops = new THREE.Mesh(
     new THREE.PlaneGeometry(open.right - open.left, open.top - open.bottom),
     new THREE.MeshBasicMaterial({ map: dropsTexture(), transparent: true, opacity: 0.8, depthWrite: false }),
   );
   drops.position.set(0, (open.top + open.bottom) / 2, z - 0.005);
+  drops.renderOrder = 3;
   scene.add(drops);
+  const glassW = open.right - open.left;
+  const glassH = open.top - open.bottom;
+  const haze = createGlassHaze({ width: glassW, height: glassH });
+  haze.position.set(0, (open.top + open.bottom) / 2, z - 0.012);
+  scene.add(haze);
+  const runners = createGlassDrops({ width: glassW, height: glassH, count: desktop ? 34 : 18, random: seeded(53) });
+  runners.mesh.position.set(0, (open.top + open.bottom) / 2, z - 0.003);
+  scene.add(runners.mesh);
+  tickers.push((dt, t) => runners.tick(dt, t * motion));
 
   // LED strips: magenta along the ceiling edge, cyan under the sill.
   const strips = [
@@ -1261,6 +1311,15 @@ function addKeyboard(scene, pickables) {
 }
 
 function keycapGeometry(units) {
+  // Most keys are one unit wide: they all share one geometry.
+  const cached = keycapCache.get(units);
+  if (cached) return cached;
+  const geometry = buildKeycap(units);
+  keycapCache.set(units, geometry);
+  return geometry;
+}
+
+function buildKeycap(units) {
   const w = units * KEY_U - KEY_GAP;
   const d = KEY_U - KEY_GAP;
   const geo = new RoundedBoxGeometry(w, KEY_H, d, 3, 0.009);
@@ -1279,25 +1338,24 @@ function keycapGeometry(units) {
 
 function addLegend(mesh, label, color) {
   if (!label) return;
+  // Keys with the same legend share one texture and one material, and every legend shares one plane.
   const key = `${label}|${color}`;
-  let map = legendCache.get(key);
-  if (!map) {
+  let material = legendCache.get(key);
+  if (!material) {
     const size = label.length > 3 ? 44 : label.length > 1 ? 52 : 72;
-    map = labelTexture(label, color, 256, 128, size);
-    legendCache.set(key, map);
-  }
-  const plane = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.064, 0.032),
-    new THREE.MeshStandardMaterial({
-      map,
+    material = new THREE.MeshStandardMaterial({
+      map: labelTexture(label, color, 256, 128, size),
       transparent: true,
       alphaTest: 0.3,
       roughness: 0.6,
       polygonOffset: true,
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -2,
-    }),
-  );
+    });
+    legendCache.set(key, material);
+  }
+  legendPlane ??= new THREE.PlaneGeometry(0.064, 0.032);
+  const plane = new THREE.Mesh(legendPlane, material);
   plane.rotation.x = -Math.PI / 2;
   plane.position.y = KEY_H + 0.0008;
   plane.raycast = () => {};
@@ -1826,6 +1884,8 @@ function addCat(scene, pickables) {
 }
 
 // Shell fur: the skin plus stacked offset copies that keep fewer and fewer strands, so hairs taper to tips.
+// The copies are one instanced mesh: every instance is the same geometry, and the vertex shader pushes it out
+// along the normals by its own layer height, so a coat is one draw call instead of one per layer.
 function addFur(parent, geometry, { coat, length, layers, repeat }) {
   const strands = furNoise().clone();
   strands.repeat.set(repeat[0], repeat[1]);
@@ -1838,34 +1898,36 @@ function addFur(parent, geometry, { coat, length, layers, repeat }) {
   skin.receiveShadow = true;
   parent.add(skin);
 
-  const base = geometry.attributes.position;
-  const normal = geometry.attributes.normal;
-  for (let i = 1; i <= layers; i += 1) {
-    const h = i / layers;
-    const shell = geometry.clone();
-    const pos = shell.attributes.position;
-    for (let v = 0; v < pos.count; v += 1) {
-      pos.setXYZ(
-        v,
-        base.getX(v) + normal.getX(v) * length * h,
-        base.getY(v) + normal.getY(v) * length * h - length * 0.25 * h * h,
-        base.getZ(v) + normal.getZ(v) * length * h,
+  const shellGeometry = geometry.clone();
+  const heights = new Float32Array(layers);
+  for (let i = 0; i < layers; i += 1) heights[i] = (i + 1) / layers;
+  shellGeometry.setAttribute("aLayer", new THREE.InstancedBufferAttribute(heights, 1));
+
+  const material = new THREE.MeshStandardMaterial({ map: coat, alphaMap: strands, roughness: 1 });
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uFurLength = { value: length };
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute float aLayer;\nvarying float vLayer;\nuniform float uFurLength;")
+      .replace(
+        "#include <begin_vertex>",
+        "#include <begin_vertex>\nvLayer = aLayer;\ntransformed += objectNormal * uFurLength * aLayer;\ntransformed.y -= uFurLength * 0.25 * aLayer * aLayer;",
       );
-    }
-    const shade = 0.45 + 0.55 * h;
-    const mesh = new THREE.Mesh(
-      shell,
-      new THREE.MeshStandardMaterial({
-        map: coat,
-        alphaMap: strands,
-        alphaTest: Math.min(0.96, 0.06 + h * 0.9),
-        color: new THREE.Color(shade, shade, shade),
-        roughness: 1,
-      }),
-    );
-    mesh.receiveShadow = true;
-    parent.add(mesh);
-  }
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nvarying float vLayer;")
+      // Inner layers are darker, like the roots of a coat.
+      .replace("#include <color_fragment>", "#include <color_fragment>\ndiffuseColor.rgb *= 0.45 + 0.55 * vLayer;")
+      // Higher layers keep fewer strands: the cut-off rises with the layer height.
+      .replace("#include <alphatest_fragment>", "if (diffuseColor.a < min(0.96, 0.06 + vLayer * 0.9)) discard;");
+  };
+  material.customProgramCacheKey = () => "fur-shell";
+
+  const shells = new THREE.InstancedMesh(shellGeometry, material, layers);
+  const identity = new THREE.Matrix4();
+  for (let i = 0; i < layers; i += 1) shells.setMatrixAt(i, identity);
+  // The shells grow past the skin by up to `length`, outside the bounds the geometry reports.
+  shells.frustumCulled = false;
+  shells.receiveShadow = true;
+  parent.add(shells);
 }
 
 function ellipsoid(rx, ry, rz, ws = 32, hs = 20, poles = "y") {
@@ -1944,17 +2006,25 @@ function taperedTube(curve, segments, radial, r0, r1) {
   return geo;
 }
 
+// The skyline: three layers of towers behind the window. Every tower is baked into one of four merged meshes
+// (one per facade texture), the neon trim into a fifth and the rooftop metal into a sixth, so the whole city
+// costs a handful of draw calls where it used to cost well over a hundred.
 function addCity(scene) {
   const rand = seeded(11);
-  const blink = [];
+  // Roof tiers and water tanks draw from their own stream, so adding them does not move a single tower.
+  const extra = seeded(97);
+  const beacons = [];
   const layers = [
     { z: -8, depth: 1.4, count: 8, spread: 24, base: -9, top: [-0.6, 1.6], width: [1.4, 2.4], glow: 0.8, neon: 0.6 },
     { z: -13, depth: 2, count: 15, spread: 36, base: -9, top: [0.2, 3.4], width: [1.3, 2.6], glow: 0.65, neon: 0.35 },
     { z: -21, depth: 3, count: 24, spread: 54, base: -9, top: [1, 6.5], width: [1.4, 3], glow: 0.5, neon: 0.2 },
   ];
   const neonColors = [0x49e7ff, 0xff4fd8, 0xffc14a, 0x7cff6b, 0xa27dff];
-  const antennaMat = new THREE.MeshStandardMaterial({ color: 0x1a1e26, roughness: 0.6, metalness: 0.5 });
-  const facades = [0x7c889c, 0x6d7a90, 0x8d97a8, 0x7a7090].map((tint) => facadeMaterial(tint));
+  const metalMat = new THREE.MeshStandardMaterial({ color: 0x1a1e26, roughness: 0.6, metalness: 0.5 });
+  const facades = [0x7c889c, 0x6d7a90, 0x8d97a8, 0x7a7090].map((tint) => cityGlow(facadeMaterial(tint)));
+  const towers = facades.map(() => []);
+  const trim = [];
+  const metal = [];
 
   for (const layer of layers) {
     for (let i = 0; i < layer.count; i += 1) {
@@ -1965,51 +2035,136 @@ function addCity(scene) {
       const w = lerp(layer.width[0], layer.width[1], rand());
       const d = layer.depth * (0.7 + rand() * 0.6);
       const h = top - layer.base;
-      const geo = new THREE.BoxGeometry(w, h, d);
-      worldUV(geo, w, h, d, 2.6);
-      const material = facades[Math.floor(rand() * facades.length)].clone();
-      material.emissiveIntensity = layer.glow * (0.6 + rand() * 0.6);
-      const building = new THREE.Mesh(geo, material);
+      const pick = Math.floor(rand() * facades.length);
+      const glow = layer.glow * (0.6 + rand() * 0.6);
       const z = layer.z - rand() * 1.5;
-      building.position.set(x, layer.base + h / 2, z);
-      scene.add(building);
+      towers[pick].push(towerGeometry(w, h, d, x, layer.base + h / 2, z, glow, top));
 
       if (rand() < layer.neon) {
-        const color = neonColors[Math.floor(rand() * neonColors.length)];
-        const strip = new THREE.Mesh(
-          new THREE.BoxGeometry(0.07, Math.min(h * 0.5, 3.4), 0.03),
-          new THREE.MeshBasicMaterial({ color, toneMapped: false }),
-        );
-        strip.position.set(x + (rand() - 0.5) * w * 0.7, top - Math.min(h * 0.25, 1.9) - 0.2, z + d / 2 + 0.03);
-        scene.add(strip);
-        const crown = new THREE.Mesh(
-          new THREE.BoxGeometry(w * 0.98, 0.05, 0.03),
-          new THREE.MeshBasicMaterial({ color, toneMapped: false }),
-        );
-        crown.position.set(x, top - 0.08, z + d / 2 + 0.03);
-        scene.add(crown);
+        const color = new THREE.Color(neonColors[Math.floor(rand() * neonColors.length)]);
+        const strip = new THREE.BoxGeometry(0.07, Math.min(h * 0.5, 3.4), 0.03);
+        strip.translate(x + (rand() - 0.5) * w * 0.7, top - Math.min(h * 0.25, 1.9) - 0.2, z + d / 2 + 0.03);
+        trim.push(paintGeometry(strip, color));
+        const crown = new THREE.BoxGeometry(w * 0.98, 0.05, 0.03);
+        crown.translate(x, top - 0.08, z + d / 2 + 0.03);
+        trim.push(paintGeometry(crown, color));
       }
       if (rand() < 0.45) {
-        const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.03, 0.9, 6), antennaMat);
-        mast.position.set(x + (rand() - 0.5) * w * 0.5, top + 0.45, z);
-        scene.add(mast);
-        const light = new THREE.Mesh(
-          new THREE.SphereGeometry(0.05, 8, 6),
-          new THREE.MeshBasicMaterial({ color: 0xff2a2a, toneMapped: false }),
-        );
-        light.position.set(mast.position.x, top + 0.92, z);
-        light.userData.phase = rand() * Math.PI * 2;
-        scene.add(light);
-        blink.push(light);
+        const mastX = x + (rand() - 0.5) * w * 0.5;
+        metal.push(new THREE.CylinderGeometry(0.02, 0.03, 0.9, 6).translate(mastX, top + 0.45, z));
+        beacons.push({ x: mastX, y: top + 0.92, z, phase: rand() * Math.PI * 2 });
+      }
+
+      // A setback on the roof breaks the flat box, and a water tank on legs gives some skylines a second silhouette.
+      if (h > 4 && extra() < 0.55) {
+        const tw = w * lerp(0.45, 0.75, extra());
+        const td = d * lerp(0.45, 0.75, extra());
+        const th = lerp(0.3, 1.1, extra());
+        const tx = x + (extra() - 0.5) * (w - tw) * 0.6;
+        const tz = z + (extra() - 0.5) * (d - td) * 0.4;
+        towers[pick].push(towerGeometry(tw, th, td, tx, top + th / 2, tz, glow, top + th));
+      }
+      if (extra() < 0.22) {
+        const tx = x + (extra() - 0.5) * w * 0.5;
+        const radius = lerp(0.14, 0.22, extra());
+        metal.push(new THREE.BoxGeometry(radius * 1.1, 0.34, radius * 1.1).translate(tx, top + 0.17, z));
+        metal.push(new THREE.CylinderGeometry(radius, radius, 0.4, 10).translate(tx, top + 0.54, z));
+        metal.push(new THREE.ConeGeometry(radius * 1.06, 0.14, 10).translate(tx, top + 0.81, z));
       }
     }
   }
-  tickers.push((dt, t) => {
-    for (const light of blink) {
-      const on = motion ? Math.sin(t * 2.2 + light.userData.phase) > 0.2 : true;
-      light.visible = on;
-    }
+
+  towers.forEach((list, i) => {
+    if (list.length) scene.add(new THREE.Mesh(mergedGeometry(list), facades[i]));
   });
+  if (trim.length) {
+    scene.add(new THREE.Mesh(mergedGeometry(trim), new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false })));
+  }
+  if (metal.length) scene.add(new THREE.Mesh(mergedGeometry(metal), metalMat));
+
+  // Aviation lights on the masts: soft red dots that fade in and out instead of popping.
+  const red = new THREE.Color(0xff2a2a);
+  const positions = new Float32Array(beacons.length * 3);
+  const colors = new Float32Array(beacons.length * 3);
+  beacons.forEach((b, i) => {
+    positions.set([b.x, b.y, b.z], i * 3);
+    colors.set([red.r, red.g, red.b], i * 3);
+  });
+  const dots = new THREE.BufferGeometry();
+  dots.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  const dotColors = new THREE.BufferAttribute(colors, 3);
+  dots.setAttribute("color", dotColors);
+  scene.add(
+    new THREE.Points(
+      dots,
+      new THREE.PointsMaterial({
+        map: dotTexture(),
+        vertexColors: true,
+        size: 0.5,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
+        fog: false,
+      }),
+    ),
+  );
+  tickers.push((dt, t) => {
+    beacons.forEach((b, i) => {
+      const on = motion ? smoothstep(0.1, 0.35, Math.sin(t * 2.2 + b.phase)) : 1;
+      dotColors.setXYZ(i, red.r * on, red.g * on, red.b * on);
+    });
+    dotColors.needsUpdate = true;
+  });
+}
+
+// A tower with window UVs in world units and a per-vertex glow that fades towards the street, so the lower floors
+// sink into shadow instead of every facade burning evenly down to the base.
+function towerGeometry(w, h, d, x, y, z, glow, top) {
+  const geometry = new THREE.BoxGeometry(w, h, d, 1, 6, 1);
+  worldUV(geometry, w, h, d, 2.6);
+  geometry.translate(x, y, z);
+  const pos = geometry.attributes.position;
+  const levels = new Float32Array(pos.count);
+  for (let i = 0; i < pos.count; i += 1) levels[i] = glow * lerp(0.45, 1.15, smoothstep(-5, top, pos.getY(i)));
+  geometry.setAttribute("aGlow", new THREE.BufferAttribute(levels, 1));
+  return geometry;
+}
+
+// Gives every vertex of a geometry the same colour, for meshes that share one material but not one tint.
+function paintGeometry(geometry, color) {
+  const count = geometry.attributes.position.count;
+  const colors = new Float32Array(count * 3);
+  for (let i = 0; i < count; i += 1) colors.set([color.r, color.g, color.b], i * 3);
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  return geometry;
+}
+
+function mergedGeometry(list) {
+  const merged = mergeBuffers(list.map((g) => ({ attributes: g.attributes, index: g.index.array })));
+  const geometry = new THREE.BufferGeometry();
+  for (const [name, { array, itemSize }] of Object.entries(merged.attributes)) {
+    geometry.setAttribute(name, new THREE.BufferAttribute(array, itemSize));
+  }
+  geometry.setIndex(new THREE.BufferAttribute(merged.index, 1));
+  for (const g of list) g.dispose();
+  return geometry;
+}
+
+// Scales the emissive window light by the per-vertex glow of towerGeometry.
+function cityGlow(material) {
+  // The per-vertex glow carries the whole intensity (layer glow, tower variation, fade to the street).
+  material.emissiveIntensity = 1;
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute float aGlow;\nvarying float vGlow;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvGlow = aGlow;");
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nvarying float vGlow;")
+      .replace("#include <emissivemap_fragment>", "#include <emissivemap_fragment>\ntotalEmissiveRadiance *= vGlow;");
+  };
+  material.customProgramCacheKey = () => "city-glow";
+  return material;
 }
 
 function addSearchlights(scene) {
@@ -2338,6 +2493,9 @@ function addParty() {
     party.signs.forEach((sign, i) => {
       if (done) sign.material.color.copy(white);
       else sign.material.color.setHSL((t * speed * 0.3 + i * 0.15) % 1, 1, 0.65);
+      // The halo glows in whatever colour the sign has right now, and goes back to its own when the party ends.
+      const halo = sign.userData.halo;
+      if (halo) halo.material.color.copy(done ? halo.userData.base : sign.material.color);
     });
     for (const light of party.lights) {
       if (done) light.color.copy(lampColor);
@@ -2349,12 +2507,31 @@ function addParty() {
 function addSigns(scene, pickables) {
   const group = new THREE.Group();
   scene.add(group);
+  const glow = haloTexture();
   const signs = SIGNS.map(([title, command, color, x, y, z], index) => {
     const material = signMaterial(title, color);
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 0.42), material);
+    // A soft halo behind the tube: bloom only lifts what is already bright, this is the light the sign throws
+    // into the rain around it. A child of the sign, so it bobs, flickers and grows on hover together with it.
+    const halo = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: glow,
+        color,
+        transparent: true,
+        opacity: HALO_OPACITY,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    halo.scale.set(2.05, 1.12, 1);
+    halo.position.set(0, 0, -0.05);
+    halo.userData.base = new THREE.Color(color);
+    mesh.add(halo);
     mesh.position.set(x, y, z);
     mesh.userData = {
       command,
+      halo,
       baseY: y,
       phase: index * 0.7,
       onHover: (on) => mesh.scale.setScalar(on ? 1.07 : 1),
@@ -2379,6 +2556,7 @@ function addSigns(scene, pickables) {
       flicker.left -= dt;
       const dim = flicker.left > 0 && Math.sin(flicker.left * 60) > 0;
       flicker.sign.material.opacity = dim ? 0.35 : 1;
+      flicker.sign.userData.halo.material.opacity = HALO_OPACITY * (dim ? 0.35 : 1);
       if (flicker.left <= 0) flicker.sign = null;
     }
   });
@@ -2442,45 +2620,14 @@ function addCars(scene) {
 }
 
 function addRain(scene) {
-  const count = desktop ? 1100 : 500;
-  const length = 0.22;
-  const positions = new Float32Array(count * 6);
-  for (let i = 0; i < count; i += 1) {
-    const x = (Math.random() - 0.5) * 16;
-    const y = -3 + Math.random() * 10;
-    const z = -2.2 - Math.random() * 8;
-    positions.set([x, y, z, x + 0.03, y + length, z], i * 6);
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  const rain = new THREE.LineSegments(
-    geometry,
-    new THREE.LineBasicMaterial({ color: 0xa8c8ff, transparent: true, opacity: 0.32, depthWrite: false }),
-  );
-  rain.frustumCulled = false;
-  scene.add(rain);
-  const attr = geometry.attributes.position;
-  tickers.push((dt) => {
-    if (!motion) return;
-    const fall = 7.5 * dt;
-    const drift = 0.9 * dt;
-    const array = attr.array;
-    for (let i = 0; i < count; i += 1) {
-      const o = i * 6;
-      array[o] -= drift;
-      array[o + 3] -= drift;
-      array[o + 1] -= fall;
-      array[o + 4] -= fall;
-      if (array[o + 1] < -3) {
-        const x = (Math.random() - 0.5) * 16;
-        array[o] = x;
-        array[o + 3] = x + 0.03;
-        array[o + 1] = 7;
-        array[o + 4] = 7 + length;
-      }
-    }
-    attr.needsUpdate = true;
+  const rain = createRain({
+    count: desktop ? 1300 : 600,
+    fogDensity: scene.fog?.density ?? 0.026,
+    random: seeded(7),
   });
+  scene.add(rain.mesh);
+  // Under reduced motion the clock stays at zero and the streaks hang still.
+  tickers.push((dt, t) => rain.tick(dt, t * motion));
 }
 
 // ---------- materials and procedural textures ----------
@@ -2786,33 +2933,63 @@ function furNoise() {
   return cachedFur;
 }
 
+// Windows for a tower's wall: 13 columns by 13 rows per 2.6 m tile. Most floors are dark with a faint cool
+// reflection and the odd warm window; some floors are offices lit along their whole length.
 function facadeMaterial(tint) {
-  const size = 256;
+  const size = 512;
   const albedo = document.createElement("canvas");
   const glow = document.createElement("canvas");
   albedo.width = glow.width = size;
   albedo.height = glow.height = size;
   const actx = albedo.getContext("2d");
   const gctx = glow.getContext("2d");
-  actx.fillStyle = "#11151d";
+  actx.fillStyle = "#0f131b";
   actx.fillRect(0, 0, size, size);
   gctx.fillStyle = "#000";
   gctx.fillRect(0, 0, size, size);
-  const cell = 20;
-  const lit = ["#ffd9a0", "#ffe7c2", "#f3c77e", "#bfe3ff"];
-  for (let y = 4; y < size; y += cell) {
-    for (let x = 4; x < size; x += cell) {
+  const cell = 40;
+  const warm = ["#ffd9a0", "#ffe7c2", "#f3c77e", "#ffb870"];
+  const cool = ["#bfe3ff", "#d8efff", "#a8d4ff"];
+  for (let row = 0, y = 8; y < size; y += cell, row += 1) {
+    // The floor slab between two rows of windows.
+    actx.fillStyle = "#171d28";
+    actx.fillRect(0, y - 6, size, 3);
+    const office = hash2(row * 7 + tint, 5) > 0.8;
+    for (let x = 8; x < size; x += cell) {
       const h = hash2(x + tint, y);
-      actx.fillStyle = h > 0.5 ? "#1a222c" : "#151b24";
-      actx.fillRect(x, y, 12, 14);
-      if (h < 0.84) continue;
-      const color = lit[Math.floor(hash2(y, x) * lit.length)];
-      actx.fillStyle = color;
-      actx.fillRect(x, y, 12, 14);
+      const lit = office ? h > 0.4 : h > 0.86;
+      const pane = actx.createLinearGradient(0, y, 0, y + 28);
+      pane.addColorStop(0, "#1d2836");
+      pane.addColorStop(1, "#10161f");
+      actx.fillStyle = pane;
+      actx.fillRect(x, y, 24, 28);
+      if (!lit) continue;
+      const palette = office ? cool : warm;
+      const color = palette[Math.floor(hash2(y, x) * palette.length)];
+      const body = actx.createLinearGradient(0, y, 0, y + 28);
+      body.addColorStop(0, color);
+      body.addColorStop(1, office ? "#8fb4d8" : "#c98f4a");
+      actx.fillStyle = body;
+      actx.fillRect(x, y, 24, 28);
       gctx.fillStyle = color;
       gctx.globalAlpha = 0.45 + hash2(x * 3, y) * 0.55;
-      gctx.fillRect(x, y, 12, 14);
+      gctx.fillRect(x, y, 24, 28);
       gctx.globalAlpha = 1;
+      // Blinds half drawn, or a mullion down the middle, so the lit squares are not all the same square.
+      const detail = hash2(y * 5, x * 3);
+      if (detail > 0.62) {
+        for (let blind = y + 2; blind < y + 16; blind += 5) {
+          actx.fillStyle = "#1a1612";
+          actx.fillRect(x, blind, 24, 2);
+          gctx.fillStyle = "#000";
+          gctx.fillRect(x, blind, 24, 2);
+        }
+      } else if (detail < 0.3) {
+        actx.fillStyle = "#0b0f15";
+        actx.fillRect(x + 11, y, 2, 28);
+        gctx.fillStyle = "#000";
+        gctx.fillRect(x + 11, y, 2, 28);
+      }
     }
   }
   const map = canvasTexture(albedo, { srgb: true, repeat: [1, 1] });
@@ -2905,6 +3082,23 @@ function gradientDot() {
   g.addColorStop(1, "rgba(255,255,255,0)");
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 64, 64);
+  const map = new THREE.CanvasTexture(c);
+  map.colorSpace = THREE.SRGBColorSpace;
+  return map;
+}
+
+// A glow that drops off quickly: bright at the tube, a faint wash a sign's width away.
+function haloTexture() {
+  const c = document.createElement("canvas");
+  c.width = c.height = 128;
+  const ctx = c.getContext("2d");
+  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0, "rgba(255,255,255,1)");
+  g.addColorStop(0.22, "rgba(255,255,255,0.5)");
+  g.addColorStop(0.5, "rgba(255,255,255,0.12)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
   const map = new THREE.CanvasTexture(c);
   map.colorSpace = THREE.SRGBColorSpace;
   return map;
