@@ -8,6 +8,8 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { sound } from "./audio.js";
 import { loadLatestCommits } from "./commits.js";
+import { buildEnvironment } from "./env.js";
+import { createFinishPass } from "./finish.js";
 
 const CRT_W = 1120;
 const CRT_H = 630;
@@ -34,6 +36,17 @@ const coarse = window.matchMedia("(pointer: coarse)").matches;
 // The cat's feed and play reactions keep a small floor under reduced motion, so the action still reads.
 const motion = reduceMotion ? 0 : 1;
 let maxAniso = 8;
+// Filtered reflections of the neon window (see env.js). Only the materials that opt in through shiny() use it,
+// so the walls, the city and the wood keep the moody lights-only look.
+let envMap = null;
+
+function shiny(material, intensity = 1) {
+  if (envMap) {
+    material.envMap = envMap;
+    material.envMapIntensity = intensity;
+  }
+  return material;
+}
 
 // Every per-frame update registers here and receives (dt, elapsed) in seconds.
 const tickers = [];
@@ -135,6 +148,10 @@ function boot() {
   renderer.toneMappingExposure = 1.05;
   renderer.setClearColor(0x05060f, 1);
   maxAniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  envMap = buildEnvironment(
+    renderer,
+    SIGNS.map(([, , color, x, y, z]) => ({ color, position: [x, y, z] })),
+  );
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x05060f);
@@ -173,6 +190,13 @@ function boot() {
   );
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
+  // After tone mapping: FXAA where there is no MSAA, grade, aberration and grain (see finish.js).
+  const finish = createFinishPass({ fxaa: coarse, grain: coarse ? 0.02 : 0.03 });
+  composer.addPass(finish);
+  tickers.push((dt, t) => {
+    // Under reduced motion the grain holds still instead of crawling.
+    finish.uniforms.uTime.value = t * motion;
+  });
 
   const pickables = [];
   const { screen: screenAnchor, phone: phoneAnchor } = buildWorld(scene, pickables);
@@ -787,7 +811,7 @@ function addRoom(scene) {
   ceiling.position.set(0, room.ceiling, z + depth / 2);
   scene.add(ceiling);
 
-  const trim = new THREE.MeshStandardMaterial({ color: 0x2a2e38, roughness: 0.6, metalness: 0.4 });
+  const trim = shiny(new THREE.MeshStandardMaterial({ color: 0x2a2e38, roughness: 0.6, metalness: 0.4 }), 0.45);
   const sill = new THREE.Mesh(new RoundedBoxGeometry(6.5, 0.06, 0.4, 2, 0.015), trim);
   sill.position.set(0, open.bottom + 0.03, z + 0.14);
   sill.receiveShadow = true;
@@ -852,13 +876,14 @@ function addRoom(scene) {
 }
 
 function addDesk(scene) {
+  // The wood stays out of the environment: its bump map turns even a faint reflection into watery marbling.
   const top = new THREE.Mesh(new RoundedBoxGeometry(4.6, 0.07, 2.9, 4, 0.02), woodMaterial());
   top.position.set(0, -0.035, 0.2);
   top.receiveShadow = true;
   top.castShadow = true;
   scene.add(top);
 
-  const steel = new THREE.MeshStandardMaterial({ color: 0x16181d, roughness: 0.38, metalness: 0.75 });
+  const steel = shiny(new THREE.MeshStandardMaterial({ color: 0x16181d, roughness: 0.38, metalness: 0.75 }), 0.5);
   for (const x of [-2.12, 2.12]) {
     for (const z of [-1.0, 1.4]) {
       const leg = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.83, 0.07), steel);
@@ -890,10 +915,10 @@ function addMac(scene, pickables) {
   const chinH = 0.3 * k;
   const cy = bottom + H / 2;
 
-  const back = new THREE.MeshStandardMaterial({ color: 0x4f78b0, roughness: 0.32, metalness: 0.65 });
-  const chin = new THREE.MeshStandardMaterial({ color: 0xb9cff0, roughness: 0.4, metalness: 0.3 });
-  const bezel = new THREE.MeshStandardMaterial({ color: 0xeef1f4, roughness: 0.3, metalness: 0.05 });
-  const alu = new THREE.MeshStandardMaterial({ map: brushedTexture(), color: 0x9fb6d4, roughness: 0.3, metalness: 0.85 });
+  const back = shiny(new THREE.MeshStandardMaterial({ color: 0x4f78b0, roughness: 0.32, metalness: 0.65 }), 0.8);
+  const chin = shiny(new THREE.MeshStandardMaterial({ color: 0xb9cff0, roughness: 0.4, metalness: 0.3 }), 0.4);
+  const bezel = shiny(new THREE.MeshStandardMaterial({ color: 0xeef1f4, roughness: 0.3, metalness: 0.05 }), 0.3);
+  const alu = shiny(new THREE.MeshStandardMaterial({ map: brushedTexture(), color: 0x9fb6d4, roughness: 0.3, metalness: 0.85 }), 0.4);
 
   const body = new THREE.Mesh(new RoundedBoxGeometry(W, H, D, 4, 0.024), back);
   body.position.set(0, cy, 0);
@@ -952,10 +977,11 @@ function addMac(scene, pickables) {
   hinge.rotation.z = Math.PI / 2;
   hinge.position.copy(riseFrom);
   group.add(hinge);
+  contactShadow(group, 0.66, 0.5, { z: -0.06, margin: 0.09, strength: 0.6 });
 
   const logo = new THREE.Mesh(
     new THREE.PlaneGeometry(0.2, 0.2),
-    new THREE.MeshStandardMaterial({ map: appleTexture(), transparent: true, roughness: 0.2, metalness: 0.9, color: 0x6d8fc0 }),
+    shiny(new THREE.MeshStandardMaterial({ map: appleTexture(), transparent: true, roughness: 0.2, metalness: 0.9, color: 0x6d8fc0 }), 0.8),
   );
   logo.position.set(0, cy + 0.2 * k, -D / 2 - 0.0015);
   logo.rotation.y = Math.PI;
@@ -1039,8 +1065,9 @@ function addPhone(scene, pickables) {
   // once the camera is close to it, so the phone only leans back a little.
   group.position.set(-1.15, 0.008, 0.74);
   scene.add(group);
+  contactShadow(group, 0.34, 0.3, { y: -0.0068, margin: 0.07, strength: 0.55 });
 
-  const alu = new THREE.MeshStandardMaterial({ map: brushedTexture(), color: 0x9fa7b3, roughness: 0.3, metalness: 0.85 });
+  const alu = shiny(new THREE.MeshStandardMaterial({ map: brushedTexture(), color: 0x9fa7b3, roughness: 0.3, metalness: 0.85 }), 0.6);
   const base = new THREE.Mesh(new RoundedBoxGeometry(0.34, 0.018, 0.3, 2, 0.008), alu);
   base.position.y = 0.009;
   base.castShadow = true;
@@ -1066,7 +1093,7 @@ function addPhone(scene, pickables) {
 
   const body = new THREE.Mesh(
     new RoundedBoxGeometry(bw, bh, 0.036, 4, 0.03),
-    new THREE.MeshStandardMaterial({ color: 0x3a3f47, roughness: 0.28, metalness: 0.9 }),
+    shiny(new THREE.MeshStandardMaterial({ color: 0x3a3f47, roughness: 0.28, metalness: 0.9 }), 0.8),
   );
   body.position.set(0, bh / 2, -0.018);
   body.castShadow = true;
@@ -1147,6 +1174,7 @@ function addMat(scene) {
   mat.position.set(0.2, 0.004, 1.02);
   mat.receiveShadow = true;
   scene.add(mat);
+  contactShadow(scene, 2.3, 0.86, { x: 0.2, z: 1.02, margin: 0.07, strength: 0.5 });
 }
 
 function addKeyboard(scene, pickables) {
@@ -1159,12 +1187,15 @@ function addKeyboard(scene, pickables) {
   const width = 15 * KEY_U + 0.08;
   const depth = 5 * KEY_U + 0.08;
   // Rougher than the metal it looks like: the lamp's spot otherwise peaks into a white band along the front edge.
-  const shell = new THREE.MeshStandardMaterial({
-    map: brushedTexture(),
-    color: 0x7a818c,
-    roughness: 0.52,
-    metalness: 0.7,
-  });
+  const shell = shiny(
+    new THREE.MeshStandardMaterial({
+      map: brushedTexture(),
+      color: 0x7a818c,
+      roughness: 0.52,
+      metalness: 0.7,
+    }),
+    0.5,
+  );
   const tray = new THREE.Mesh(new RoundedBoxGeometry(width, 0.05, depth, 3, 0.016), shell);
   tray.castShadow = true;
   tray.receiveShadow = true;
@@ -1185,10 +1216,11 @@ function addKeyboard(scene, pickables) {
     group.add(foot);
   }
 
+  // A little reflection on the keycaps: enough for a soft sheen on the top faces, not enough to lift the room's mood.
   const materials = {
-    alpha: new THREE.MeshStandardMaterial({ color: 0x2b2f35, roughness: 0.58, metalness: 0.05 }),
-    mod: new THREE.MeshStandardMaterial({ color: 0x40464e, roughness: 0.58, metalness: 0.05 }),
-    accent: new THREE.MeshStandardMaterial({ color: 0x3f9f4c, roughness: 0.5, metalness: 0.05 }),
+    alpha: shiny(new THREE.MeshStandardMaterial({ color: 0x2b2f35, roughness: 0.58, metalness: 0.05 }), 0.25),
+    mod: shiny(new THREE.MeshStandardMaterial({ color: 0x40464e, roughness: 0.58, metalness: 0.05 }), 0.25),
+    accent: shiny(new THREE.MeshStandardMaterial({ color: 0x3f9f4c, roughness: 0.5, metalness: 0.05 }), 0.3),
   };
 
   KEY_ROWS.forEach((row, r) => {
@@ -1208,6 +1240,9 @@ function addKeyboard(scene, pickables) {
       acc += units;
     }
   });
+
+  // On the felt mat, not in the keyboard's tilted group, so it stays flat on the desk.
+  contactShadow(scene, 1.58, 0.58, { y: 0.0093, z: 1.0, margin: 0.06, strength: 0.55 });
 
   const plug = new THREE.Mesh(
     new RoundedBoxGeometry(0.08, 0.03, 0.05, 1, 0.008),
@@ -1275,6 +1310,8 @@ function addMouse(scene, pickables) {
   group.position.set(1.12, 0.008, 1.04);
   group.rotation.y = 0.1;
   scene.add(group);
+  // Child of the mouse, so the pad follows it around the mat.
+  contactShadow(group, 0.274, 0.504, { y: 0.0012, round: true, margin: 0.06, strength: 0.6 });
 
   const geo = ellipsoid(0.135, 0.05, 0.25, 48, 28);
   // Narrow the front a little and keep the highest point towards the palm.
@@ -1295,7 +1332,7 @@ function addMouse(scene, pickables) {
   group.add(clicker);
   const shell = new THREE.Mesh(
     geo,
-    new THREE.MeshPhysicalMaterial({ color: 0xf4f6f8, roughness: 0.18, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08 }),
+    shiny(new THREE.MeshPhysicalMaterial({ color: 0xf4f6f8, roughness: 0.18, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08 }), 0.35),
   );
   shell.position.z = -0.22;
   shell.castShadow = true;
@@ -1303,7 +1340,7 @@ function addMouse(scene, pickables) {
 
   const base = new THREE.Mesh(
     ellipsoid(0.137, 0.016, 0.252, 48, 12),
-    new THREE.MeshStandardMaterial({ color: 0xa9c2e2, roughness: 0.35, metalness: 0.5 }),
+    shiny(new THREE.MeshStandardMaterial({ color: 0xa9c2e2, roughness: 0.35, metalness: 0.5 }), 0.4),
   );
   base.position.y = 0.004;
   group.add(base);
@@ -1394,9 +1431,10 @@ function addLamp(scene, pickables) {
   const group = new THREE.Group();
   group.position.set(-1.62, 0, 0.08);
   scene.add(group);
+  contactShadow(group, 0.36, 0.36, { round: true, margin: 0.08, strength: 0.6 });
 
-  const metal = new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.38, metalness: 0.75 });
-  const brass = new THREE.MeshStandardMaterial({ color: 0xb08a4a, roughness: 0.3, metalness: 0.9 });
+  const metal = shiny(new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.38, metalness: 0.75 }), 0.7);
+  const brass = shiny(new THREE.MeshStandardMaterial({ color: 0xb08a4a, roughness: 0.3, metalness: 0.9 }), 0.8);
   const parts = [];
 
   const base = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.17, 0.04, 40), metal);
@@ -1493,6 +1531,7 @@ function addCat(scene, pickables) {
   root.position.set(1.72, 0, 0.4);
   root.rotation.y = -0.35;
   scene.add(root);
+  contactShadow(root, 0.7, 0.7, { round: true, margin: 0.12, strength: 0.6 });
 
   const fabric = new THREE.MeshStandardMaterial({ map: feltTexture("#3b2d5c"), roughness: 0.95 });
   const cushion = new THREE.Mesh(new THREE.CylinderGeometry(0.33, 0.35, 0.07, 48), fabric);
@@ -2220,7 +2259,8 @@ function addCoffee(scene) {
   mug.position.set(0.82, 0, 0.36);
   mug.visible = false;
   scene.add(mug);
-  const ceramic = new THREE.MeshStandardMaterial({ color: 0xeeeae2, roughness: 0.35 });
+  contactShadow(mug, 0.15, 0.15, { round: true, margin: 0.05, strength: 0.5 });
+  const ceramic = shiny(new THREE.MeshStandardMaterial({ color: 0xeeeae2, roughness: 0.35 }), 0.4);
   const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.065, 0.17, 32, 1, true), ceramic);
   cup.position.y = 0.085;
   cup.castShadow = true;
@@ -2541,6 +2581,60 @@ function dotTexture() {
   return map;
 }
 
+
+// Soft footprints under the things on the desk. The moon's shadow map is too coarse to ground small objects,
+// so each one gets a faint dark pad: black inside its footprint, fading to nothing over `margin` metres.
+const padCache = new Map();
+
+function padTexture(w, d, margin, round, strength) {
+  const key = [w, d, margin, round, strength].join("|");
+  const cached = padCache.get(key);
+  if (cached) return cached;
+  const size = 96;
+  const padW = w + margin * 2;
+  const padD = d + margin * 2;
+  const data = new Uint8ClampedArray(size * size * 4);
+  for (let j = 0; j < size; j += 1) {
+    for (let i = 0; i < size; i += 1) {
+      const px = ((i + 0.5) / size * 2 - 1) * (padW / 2);
+      const pz = ((j + 0.5) / size * 2 - 1) * (padD / 2);
+      let dist;
+      if (round) {
+        dist = (Math.hypot(px / (w / 2), pz / (d / 2)) - 1) * (Math.min(w, d) / 2);
+      } else {
+        const qx = Math.abs(px) - w / 2;
+        const qz = Math.abs(pz) - d / 2;
+        dist = Math.hypot(Math.max(qx, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qz), 0);
+      }
+      const t = clamp01(1 - dist / margin);
+      data[(j * size + i) * 4 + 3] = t * t * (3 - 2 * t) * 255 * strength;
+    }
+  }
+  const texture = canvasTexture(imageCanvas(data, size), { srgb: true });
+  texture.anisotropy = 1;
+  padCache.set(key, texture);
+  return texture;
+}
+
+function contactShadow(parent, w, d, { x = 0, y = 0.0013, z = 0, margin = 0.07, strength = 0.55, round = false } = {}) {
+  const pad = new THREE.Mesh(
+    new THREE.PlaneGeometry(w + margin * 2, d + margin * 2),
+    new THREE.MeshBasicMaterial({
+      map: padTexture(w, d, margin, round, strength),
+      transparent: true,
+      depthWrite: false,
+      fog: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    }),
+  );
+  pad.rotation.x = -Math.PI / 2;
+  pad.position.set(x, y, z);
+  pad.raycast = () => {};
+  parent.add(pad);
+  return pad;
+}
 
 function woodMaterial() {
   const size = 1024;
