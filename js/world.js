@@ -251,7 +251,6 @@ function boot() {
   };
   const face = new THREE.Vector3();
   const toCam = new THREE.Vector3();
-  const quat = new THREE.Quaternion();
   const corner = new THREE.Vector3();
   const screenBox = new THREE.Box3();
   const frustum = new THREE.Frustum();
@@ -1577,6 +1576,47 @@ function addLamp(scene, pickables) {
   group.add(spot, target);
   spot.target = target;
 
+  // The beam in the air: a hollow cone from the bulb to the pool of light. It is brightest across the middle of
+  // its body and fades to nothing at its rim and towards the desk, so no hard edge ever shows.
+  const beamLength = bulb.position.distanceTo(aim) * 0.98;
+  const beamMaterial = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: { uColor: { value: new THREE.Color(0xffd6a0) }, uLevel: { value: 0 } },
+    vertexShader: /* glsl */ `
+      varying vec3 vNormal;
+      varying vec3 vView;
+      varying float vAxis;
+      void main() {
+        vec4 view = modelViewMatrix * vec4(position, 1.0);
+        vNormal = normalize(normalMatrix * normal);
+        vView = normalize(-view.xyz);
+        // 0 at the bulb, 1 at the far end (ConeGeometry maps v = 1 at the apex).
+        vAxis = 1.0 - uv.y;
+        gl_Position = projectionMatrix * view;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uColor;
+      uniform float uLevel;
+      varying vec3 vNormal;
+      varying vec3 vView;
+      varying float vAxis;
+      void main() {
+        float facing = abs(dot(normalize(vNormal), normalize(vView)));
+        float body = pow(facing, 2.2);
+        float along = pow(1.0 - vAxis, 1.4) * smoothstep(0.0, 0.1, vAxis);
+        gl_FragColor = vec4(uColor * (0.5 * body * along * uLevel), 1.0);
+      }
+    `,
+  });
+  const beam = new THREE.Mesh(new THREE.ConeGeometry(Math.tan(0.4) * beamLength, beamLength, 48, 1, true), beamMaterial);
+  beam.position.copy(bulb.position).addScaledVector(dir, beamLength / 2);
+  beam.quaternion.copy(turn);
+  beam.raycast = () => {};
+  parts.push(beam);
+
   const hit = new THREE.Mesh(
     new THREE.CylinderGeometry(0.22, 0.22, 1.05, 12),
     new THREE.MeshBasicMaterial({ visible: false }),
@@ -1598,6 +1638,9 @@ function addLamp(scene, pickables) {
     const goal = state.on ? 1 : 0;
     state.level += (goal - state.level) * (reduceMotion ? 1 : Math.min(1, dt * 9));
     spot.intensity = 14 * state.level;
+    beamMaterial.uniforms.uLevel.value = state.level;
+    // The party colours the spot; the beam follows it.
+    beamMaterial.uniforms.uColor.value.copy(spot.color);
     bulbMat.emissiveIntensity = 0.05 + 3 * state.level;
     innerMat.emissiveIntensity = 0.02 + 0.6 * state.level;
   });
