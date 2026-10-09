@@ -34,11 +34,14 @@ export function mountShop(root) {
     picking: null,
     size: null,
     promo: false,
+    promoText: "",
     delivery: DELIVERY[0],
     payment: PAYMENT[1],
     order: 1041,
   };
 
+  // The add button that opened the size dialog, so focus can go back to it when the dialog closes.
+  let addId = null;
   root.classList.add("shop");
   root.replaceChildren();
   const status = el("div", "tg-status");
@@ -62,8 +65,26 @@ export function mountShop(root) {
   });
   root.addEventListener("input", (event) => {
     if (event.target.name === "promo") {
+      state.promoText = event.target.value;
       state.promo = event.target.value.trim().toUpperCase() === PROMO.code;
       renderTotals();
+    }
+  });
+  // While the phone is a sheet over the page, Tab stays inside it (and inside the size dialog while it is open).
+  // It listens on the document: focus can sit outside the phone, on a terminal button beside the sheet.
+  // Keys the terminal already handled (Tab completes in the field) are left alone.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab" || event.defaultPrevented || !root.closest("#phone.is-open")) return;
+    const scope = root.querySelector(".shop-modal") || root;
+    const items = [...scope.querySelectorAll("button:not([disabled]), input, a[href]")];
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const forward = !event.shiftKey;
+    const current = document.activeElement;
+    if ((forward ? current === last : current === first) || !scope.contains(current)) {
+      event.preventDefault();
+      (forward ? first : last).focus();
     }
   });
 
@@ -76,6 +97,7 @@ export function mountShop(root) {
       else {
         state.picking = product;
         state.size = null;
+        addId = product.id;
       }
     } else if (act === "size") state.size = value;
     else if (act === "size-ok" && state.picking && state.size) {
@@ -84,7 +106,10 @@ export function mountShop(root) {
     } else if (act === "size-cancel") state.picking = null;
     else if (act === "fav") state.favs.has(id) ? state.favs.delete(id) : state.favs.add(id);
     else if (act === "remove") state.cart.splice(Number(value), 1);
-    else if (act === "view") state.view = value;
+    else if (act === "view") {
+      state.view = value;
+      state.picking = null;
+    }
     else if (act === "theme") state.theme = state.theme === "dark" ? "light" : "dark";
     else if (act === "currency") state.currency = state.currency === "RUB" ? "BYN" : "RUB";
     else if (act === "delivery") state.delivery = value;
@@ -95,6 +120,7 @@ export function mountShop(root) {
       state.placed = { items: state.cart.slice(), total: total(), delivery: state.delivery, payment: state.payment, promo: state.promo };
       state.cart = [];
       state.promo = false;
+      state.promoText = "";
       state.view = "done";
     }
     render();
@@ -117,6 +143,7 @@ export function mountShop(root) {
   }
 
   function render() {
+    const focus = focusedAction();
     root.dataset.theme = state.theme;
     body.replaceChildren();
     if (state.view === "catalog") renderCatalog();
@@ -126,6 +153,26 @@ export function mountShop(root) {
     else renderDone();
     renderFoot();
     if (state.picking) body.append(sizeModal());
+    restoreFocus(focus);
+  }
+
+  // Rebuilding the screen drops the focused button, so keep the keyboard position: the same action when it is
+  // still on screen, the first size when the dialog opens, and the add button when the dialog closes.
+  function focusedAction() {
+    const node = document.activeElement;
+    if (!node || !root.contains(node) || !node.dataset.act) return null;
+    return { act: node.dataset.act, id: node.dataset.id, value: node.dataset.value, inModal: !!node.closest(".shop-modal") };
+  }
+
+  function restoreFocus(focus) {
+    let target = null;
+    if (state.picking && !focus?.inModal) target = root.querySelector(".shop-modal .shop-chip.on, .shop-modal .shop-chip");
+    else if (focus?.inModal && !state.picking) target = root.querySelector(`[data-act="add"][data-id="${addId}"]`);
+    else if (focus) {
+      const scope = focus.inModal ? root.querySelector(".shop-modal") : root;
+      target = [...scope.querySelectorAll("[data-act]")].find((n) => n.dataset.act === focus.act && n.dataset.id === focus.id && n.dataset.value === focus.value) || root.querySelector(".shop-body button");
+    }
+    target?.focus({ preventScroll: true });
   }
 
   function renderCatalog() {
@@ -135,8 +182,8 @@ export function mountShop(root) {
     for (const p of PRODUCTS) grid.append(card(p));
     const fab = button("cart-fab", "", { act: "view", value: "cart" });
     fab.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6h15l-1.5 9h-12z"/><circle cx="9" cy="20" r="1"/><circle cx="18" cy="20" r="1"/><path d="M6 6L5 3H2"/></svg>';
-    fab.append(el("span", "badge", String(state.cart.length)));
-    fab.setAttribute("aria-label", "Корзина");
+    if (state.cart.length) fab.append(el("span", "badge", String(state.cart.length)));
+    fab.setAttribute("aria-label", state.cart.length ? `Корзина, ${state.cart.length} шт.` : "Корзина");
     body.append(fab, head, grid);
   }
 
@@ -145,8 +192,10 @@ export function mountShop(root) {
     const art = el("div", "shop-art");
     art.style.background = `linear-gradient(145deg, ${p.tone[0]}, ${p.tone[1]})`;
     art.innerHTML = `<svg viewBox="0 0 100 100" aria-hidden="true">${ART[p.art]}</svg>`;
-    const fav = button(`fav${state.favs.has(p.id) ? " on" : ""}`, "♥", { act: "fav", id: p.id });
+    const faved = state.favs.has(p.id);
+    const fav = button(`fav${faved ? " on" : ""}`, "♥", { act: "fav", id: p.id });
     fav.setAttribute("aria-label", "В избранное");
+    fav.setAttribute("aria-pressed", String(faved));
     art.append(fav);
     const row = el("div", "shop-row");
     const info = el("div");
@@ -159,7 +208,7 @@ export function mountShop(root) {
   }
 
   function renderCart() {
-    body.append(viewHead("CART"));
+    body.append(viewHead("КОРЗИНА"));
     if (!state.cart.length) {
       body.append(el("p", "shop-empty", "Корзина пуста"));
       return;
@@ -181,7 +230,7 @@ export function mountShop(root) {
     promo.placeholder = "ПРОМОКОД (попробуйте RENFILD)";
     promo.autocomplete = "off";
     promo.spellcheck = false;
-    promo.value = state.promo ? PROMO.code : "";
+    promo.value = state.promoText;
     body.append(promo, el("div", "shop-total"), button("shop-cta", "Оформить заказ", { act: "checkout" }));
     renderTotals();
   }
@@ -194,7 +243,7 @@ export function mountShop(root) {
   }
 
   function renderFavs() {
-    body.append(viewHead("FAVORITES"));
+    body.append(viewHead("ИЗБРАННОЕ"));
     const items = PRODUCTS.filter((p) => state.favs.has(p.id));
     if (!items.length) {
       body.append(el("p", "shop-empty", "Избранное пусто. Нажмите ♥ на товаре."));
@@ -234,8 +283,11 @@ export function mountShop(root) {
   }
 
   function renderFoot() {
+    // The theme mark is a drawn half-disc, so it does not depend on which font has the ◐ glyph.
+    const theme = button("shop-icon", "", { act: "theme" }, "Тема");
+    theme.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>';
     foot.replaceChildren(
-      button("shop-icon", "◐", { act: "theme" }, "Тема"),
+      theme,
       button("shop-icon", state.currency === "RUB" ? "₽" : "Br", { act: "currency" }, "Валюта"),
       favButton(),
     );
@@ -245,6 +297,7 @@ export function mountShop(root) {
     link.rel = "noopener noreferrer";
     link.className = "shop-src";
     link.textContent = "демо · код tgbotshop";
+    link.append(el("span", "sr", " (откроется в новой вкладке)"));
     foot.append(link);
   }
 
@@ -260,7 +313,9 @@ export function mountShop(root) {
     box.append(el("div", "shop-label", `${state.picking.name}: выберите размер`));
     box.append(chips(state.picking.sizes, state.size, "size"));
     const row = el("div", "shop-modal-row");
-    row.append(button("shop-ghost", "Отмена", { act: "size-cancel" }), button(`shop-cta${state.size ? "" : " off"}`, "В корзину", { act: "size-ok" }));
+    const cta = button(`shop-cta${state.size ? "" : " off"}`, "В корзину", { act: "size-ok" });
+    cta.disabled = !state.size;
+    row.append(button("shop-ghost", "Отмена", { act: "size-cancel" }), cta);
     box.append(row);
     wrap.append(box);
     return wrap;

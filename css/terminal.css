@@ -97,6 +97,7 @@ p {
 }
 
 .brand {
+  font-size: 1.1em;
   font-weight: 600;
 }
 
@@ -137,10 +138,13 @@ p {
   background: #314033;
 }
 
+/* Headings are em-based so they scale with the terminal's size, including the 3D screen's zoom. */
 .h {
-  margin: 0.15rem 0 0.75rem;
+  margin: 0.25rem 0 0.8rem;
   color: var(--accent);
-  font-size: 1.05rem;
+  font-size: 1.2em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .p,
@@ -237,7 +241,7 @@ p {
   order: 1;
   flex: none;
   margin: 0 0 0.35rem;
-  font-size: 0.82rem;
+  font-size: 0.875em;
 }
 
 form {
@@ -257,7 +261,11 @@ form {
   overflow-y: hidden;
   overscroll-behavior-x: contain;
   scroll-snap-type: x proximity;
-  padding: 0.55rem 0 0.2rem;
+  /* The snap stops at the padding edge, so the first chip keeps its focus ring inside the gutter. */
+  scroll-padding-inline: 0.35rem;
+  /* Negative side margin and padding keep the chips on the gutter while the focus ring (5px) fits inside. */
+  margin: 0 -0.35rem;
+  padding: 0.6rem 0.35rem 0.4rem;
   mask-image: linear-gradient(90deg, #000 88%, transparent);
   scrollbar-width: thin;
   scrollbar-color: #314033 transparent;
@@ -368,7 +376,7 @@ form {
   scroll-snap-align: start;
   white-space: nowrap;
   padding: 0.4rem 0.7rem;
-  border: 1px solid #314033;
+  border: 1px solid #4a6b51;
   border-radius: 2px;
   background: transparent;
   color: var(--fg);
@@ -435,7 +443,8 @@ button:focus-visible,
 }
 
 @media (pointer: coarse) {
-  .run {
+  .run,
+  .chip {
     min-height: 44px;
   }
 }

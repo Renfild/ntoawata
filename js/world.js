@@ -7,6 +7,12 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { sound } from "./audio.js";
+import { loadLatestCommits } from "./commits.js";
+import { buildEnvironment } from "./env.js";
+import { createFinishPass } from "./finish.js";
+import { mergeBuffers } from "./merge.js";
+import { createGovernor, pinnedPixelRatio, pixelRatioSteps } from "./quality.js";
+import { createGlassDrops, createGlassHaze, createRain, setRainViewport } from "./rain.js";
 
 const CRT_W = 1120;
 const CRT_H = 630;
@@ -30,8 +36,23 @@ const wideQuery = window.matchMedia("(min-width: 900px) and (min-height: 560px)"
 const desktop = wideQuery.matches;
 const coarse = window.matchMedia("(pointer: coarse)").matches;
 // Ambient motion (rain, cars, breathing) scales by this; direct feedback such as key presses does not.
+// The cat's feed and play reactions keep a small floor under reduced motion, so the action still reads.
 const motion = reduceMotion ? 0 : 1;
 let maxAniso = 8;
+// Filtered reflections of the neon window (see env.js). Only the materials that opt in through shiny() use it,
+// so the walls, the city and the wood keep the moody lights-only look.
+let envMap = null;
+const shinies = [];
+
+function shiny(material, intensity = 1) {
+  // Remembered even without a map, so a context that comes back can bake one and hand it to every material.
+  shinies.push([material, intensity]);
+  if (envMap) {
+    material.envMap = envMap;
+    material.envMapIntensity = intensity;
+  }
+  return material;
+}
 
 // Every per-frame update registers here and receives (dt, elapsed) in seconds.
 const tickers = [];
@@ -40,6 +61,8 @@ const party = { left: 0, signs: [], lights: [] };
 const keyByCode = new Map();
 const keyMeshes = [];
 const legendCache = new Map();
+let legendPlane = null;
+const keycapCache = new Map();
 
 const canvas = document.querySelector("#webgl");
 const crt = document.querySelector("#crt");
@@ -47,10 +70,18 @@ const input = document.querySelector("#cmd");
 const form = document.querySelector("#form");
 
 // Opening shot per layout: wide windows put the terminal on the monitor, narrow ones dock it below the scene.
+// The wide pose was found by projecting the corners of every sign, the lamp, the phone, the mouse and the cat
+// through a 46 degree lens at 16:10: the whole set stays inside the frame with about 6% to spare, nothing
+// hides behind the iMac, and it keeps the three-quarter view (about 23 degrees off the axis) that gives depth.
+// Move a sign or the desk contents and the pose needs checking again.
 const HEROES = {
-  wide: { pos: [2.0, 2.3, 4.3], target: [0.05, 0.9, 0.45] },
+  wide: { pos: [2.04, 1.96, 4.04], target: [0.53, 1.02, 0.48] },
   narrow: { pos: [1.8, 2.35, 4.1], target: [0.1, 1.2, 0.3] },
 };
+// Vertical lens of the wide shot. Windows narrower than the 16:10 it was framed for widen it (frameLayout).
+const WIDE_FOV = 46;
+// How much of its colour a neon sign throws around itself.
+const HALO_OPACITY = 0.2;
 let HERO = desktop ? HEROES.wide : HEROES.narrow;
 const ARRIVE = { pos: [2.9, 2.9, 5.3], target: [0.1, 1.3, -0.2] };
 // The room is only built towards the window: keep the free camera in the arc that shows it.
@@ -94,14 +125,17 @@ const KEY_ROWS = [
   ],
 ];
 
+// Laid out for the wide opening shot at 16:10 and wider: all seven signs stay inside the frame, clear of the iMac
+// (which covers the window's left column from there) and of the window's own bars (a horizontal one at y = 2.95,
+// a vertical one at x = 0), so none of them is cut in half. AQUA hangs under SHOP on the right of the monitor.
 const SIGNS = [
-  ["RENFILD", "whoami", "#ff4fd8", -2.35, 2.55, -2.15],
-  ["AQUA", "open aquateche", "#49e7ff", -2.35, 1.85, -2.05],
-  ["RAG", "open pcai", "#7CFF6B", -1.15, 2.85, -2.35],
-  ["FISH", "open fisherman", "#ff9a3d", 0.15, 3.3, -2.4],
-  ["SHOP", "open tgbotshop", "#ffc14a", 1.35, 2.7, -2.3],
-  ["PET", "open tamagotchi-bot", "#d9a0ff", 2.35, 2.15, -2.1],
-  ["GIT", "contact", "#d7f6ff", 2.35, 1.5, -2.05],
+  ["RENFILD", "whoami", "#ff4fd8", -2.35, 2.45, -2.15],
+  ["AQUA", "open aquateche", "#49e7ff", 1.45, 1.28, -2.3],
+  ["RAG", "open pcai", "#7CFF6B", -1.15, 2.5, -2.35],
+  ["FISH", "open fisherman", "#ff9a3d", 0.62, 2.62, -2.4],
+  ["SHOP", "open tgbotshop", "#ffc14a", 1.75, 2.2, -2.3],
+  ["PET", "open tamagotchi-bot", "#d9a0ff", 2.5, 1.7, -2.1],
+  ["GIT", "contact", "#d7f6ff", 2.5, 1.1, -2.05],
 ];
 
 function boot() {
@@ -109,7 +143,8 @@ function boot() {
   try {
     renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: true,
+      // Antialiasing lives on the composer's target below; the canvas only receives the final quad.
+      antialias: false,
       alpha: false,
       powerPreference: "high-performance",
     });
@@ -118,21 +153,38 @@ function boot() {
   }
   if (!renderer.getContext()) return;
 
-  // Phones have dense screens and small GPUs: render below native resolution there.
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, coarse ? 1.25 : 1.5));
+  // Phones have dense screens and small GPUs: render below native resolution there. Within that cap the
+  // resolution follows how long frames really take (quality.js); ?q=high|medium|low pins it instead.
+  const maxRatio = Math.min(window.devicePixelRatio || 1, coarse ? 1.25 : 1.5);
+  const pinned = pinnedPixelRatio(window.location.search, maxRatio);
+  const governor = pinned === null ? createGovernor({ steps: pixelRatioSteps(maxRatio) }) : null;
+  renderer.setPixelRatio(pinned ?? maxRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
+  setRainViewport(renderer.domElement.height);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
   renderer.setClearColor(0x05060f, 1);
   maxAniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  const signLights = SIGNS.map(([, , color, x, y, z]) => ({ color, position: [x, y, z] }));
+  envMap = buildEnvironment(renderer, signLights);
+  // Render targets lose their contents with the GL context, and three.js cannot redraw the baked reflections:
+  // bake them again and hand the new map to every material that uses one.
+  canvas.addEventListener("webglcontextrestored", () => {
+    envMap = buildEnvironment(renderer, signLights);
+    for (const [material, intensity] of shinies) {
+      material.envMap = envMap;
+      material.envMapIntensity = intensity;
+      material.needsUpdate = true;
+    }
+  });
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x05060f);
   scene.fog = new THREE.FogExp2(0x120c22, 0.026);
 
-  const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.08, 60);
+  const camera = new THREE.PerspectiveCamera(WIDE_FOV, window.innerWidth / window.innerHeight, 0.08, 60);
   const intro = desktop && !reduceMotion;
   camera.position.set(...(intro ? ARRIVE.pos : HERO.pos));
 
@@ -145,7 +197,17 @@ function boot() {
   Object.assign(controls, intro ? FREE : LIMITS);
   controls.update();
 
-  const composer = new EffectComposer(renderer);
+  // The scene is drawn into the composer's target, so that target gets the multisampling (phones skip it).
+  // The neon materials' toneMapped:false is inert here: a render target switches per-material tone
+  // mapping off, and OutputPass applies ACES to the whole frame instead.
+  const sceneTarget = new THREE.WebGLRenderTarget(
+    window.innerWidth * renderer.getPixelRatio(),
+    window.innerHeight * renderer.getPixelRatio(),
+    { type: THREE.HalfFloatType, samples: coarse ? 0 : 4 },
+  );
+  const composer = new EffectComposer(renderer, sceneTarget);
+  // A custom target reports device pixels, and addPass scales by the pixel ratio again: size it in CSS pixels first.
+  composer.setSize(window.innerWidth, window.innerHeight);
   composer.addPass(new RenderPass(scene, camera));
   const bloom = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
@@ -155,6 +217,13 @@ function boot() {
   );
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
+  // After tone mapping: FXAA where there is no MSAA, grade, aberration and grain (see finish.js).
+  const finish = createFinishPass({ fxaa: coarse, grain: coarse ? 0.02 : 0.03 });
+  composer.addPass(finish);
+  tickers.push((dt, t) => {
+    // Under reduced motion the grain holds still instead of crawling.
+    finish.uniforms.uTime.value = t * motion;
+  });
 
   const pickables = [];
   const { screen: screenAnchor, phone: phoneAnchor } = buildWorld(scene, pickables);
@@ -182,7 +251,6 @@ function boot() {
   };
   const face = new THREE.Vector3();
   const toCam = new THREE.Vector3();
-  const quat = new THREE.Quaternion();
   const corner = new THREE.Vector3();
   const screenBox = new THREE.Box3();
   const frustum = new THREE.Frustum();
@@ -210,6 +278,7 @@ function boot() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    setRainViewport(renderer.domElement.height);
     composer.setSize(window.innerWidth, window.innerHeight);
     cssRenderer?.setSize(window.innerWidth, window.innerHeight);
     frameLayout(wideQuery.matches);
@@ -260,6 +329,7 @@ function boot() {
     document.body.classList.toggle("is-zoomed", Boolean(name));
     document.dispatchEvent(new CustomEvent("desk:zoomed", { detail: Boolean(name) }));
     if (zoomButton) {
+      // While zoomed the label names what the button does now, with the Esc hint; aria-pressed carries the state.
       zoomButton.setAttribute("aria-pressed", String(Boolean(name)));
       zoomButton.querySelector(".zoom-label").textContent = name ? "Esc — отдалить" : "приблизить экран";
     }
@@ -316,7 +386,21 @@ function boot() {
     });
   }
 
+  function setQuality(ratio) {
+    renderer.setPixelRatio(ratio);
+    composer.setPixelRatio(ratio);
+    setRainViewport(renderer.domElement.height);
+  }
+
+  let lastFrame = performance.now();
+  let frames = 0;
   renderer.setAnimationLoop(() => {
+    const now = performance.now();
+    // The first second is shader compiles and texture uploads, not a fair measure of the scene.
+    frames += 1;
+    const next = governor && frames > 60 ? governor.sample(now - lastFrame, now) : null;
+    lastFrame = now;
+    if (next !== null) setQuality(next);
     // Clamp so a backgrounded tab does not teleport cars and rain when it resumes.
     const dt = Math.min(clock.getDelta(), 0.1);
     const elapsed = clock.elapsedTime;
@@ -374,8 +458,6 @@ function boot() {
     flyTo(new THREE.Vector3(...HERO.pos), new THREE.Vector3(...HERO.target), 0.9);
   });
 
-  // Narrow layout docks the terminal over the lower 68% of the page. Shift the projection so the
-  // desk sits in the middle of the strip left above it, and widen the lens so the whole desk fits.
   // Narrow layouts dock the terminal over part of the page. Shift the projection so the desk sits in
   // the middle of whatever is left for it, and widen the lens when that area is small.
   document.addEventListener("desk:dock", (event) => {
@@ -388,7 +470,9 @@ function boot() {
     const h = window.innerHeight;
     camera.clearViewOffset();
     if (isWide) {
-      camera.fov = 38;
+      // Narrower windows widen the lens by the same ratio, so the sign row at both ends stays in frame.
+      const widen = Math.max(1, 1.6 / (w / h));
+      camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(WIDE_FOV / 2)) * widen));
     } else if (h <= 520 && w > h) {
       // Landscape phone: the terminal takes the right 58%, the desk the left 42%.
       camera.fov = 58;
@@ -399,7 +483,9 @@ function boot() {
       const share = 1 - dockShare;
       // A tall portrait strip has little horizontal view; a wider lens keeps the phone and the cat in frame.
       camera.fov = share < 0.45 ? 68 : 72;
-      camera.setViewOffset(w, h, 0, h * (0.5 - share / 2), w, h);
+      // In the short strip, lift the desk so the monitor's top edge clears the top of the page. The sign row is still cut there.
+      const lift = share < 0.45 ? h * 0.07 : 0;
+      camera.setViewOffset(w, h, 0, h * (0.5 - share / 2) - lift, w, h);
     }
     camera.updateProjectionMatrix();
   }
@@ -445,6 +531,8 @@ function boot() {
     cssScene.add(crtObject);
     phoneEl.classList.remove("is-sheet", "is-open");
     phoneEl.classList.add("is-3d");
+    // A sheet that was open is no longer modal once the phone sits in the 3D scene.
+    phoneEl.removeAttribute("aria-modal");
     phoneObject = new CSS3DObject(phoneEl);
     cssScene.add(phoneObject);
     anchor.updateWorldMatrix(true, false);
@@ -730,7 +818,8 @@ function addSky(scene) {
 }
 
 function addRoom(scene) {
-  const wall = new THREE.MeshStandardMaterial({ map: plasterTexture(), color: 0x2a2d3a, roughness: 0.95, metalness: 0 });
+  // A touch lighter than before: the left wall only catches ambient and hemisphere light, and read as near-black.
+  const wall = new THREE.MeshStandardMaterial({ map: plasterTexture(), color: 0x31354a, roughness: 0.95, metalness: 0 });
   const z = -1.95;
   const t = 0.2;
   const open = { left: -3.1, right: 3.1, bottom: 0.35, top: 3.85 };
@@ -763,7 +852,7 @@ function addRoom(scene) {
   ceiling.position.set(0, room.ceiling, z + depth / 2);
   scene.add(ceiling);
 
-  const trim = new THREE.MeshStandardMaterial({ color: 0x2a2e38, roughness: 0.6, metalness: 0.4 });
+  const trim = shiny(new THREE.MeshStandardMaterial({ color: 0x2a2e38, roughness: 0.6, metalness: 0.4 }), 0.45);
   const sill = new THREE.Mesh(new RoundedBoxGeometry(6.5, 0.06, 0.4, 2, 0.015), trim);
   sill.position.set(0, open.bottom + 0.03, z + 0.14);
   sill.receiveShadow = true;
@@ -792,13 +881,25 @@ function addRoom(scene) {
     }),
   );
   glass.position.set(0, (open.top + open.bottom) / 2, z - 0.02);
+  // Layers on the window draw back to front: rain (1) < glass and haze (2) < beads (3) < running drops (4).
+  glass.renderOrder = 2;
   scene.add(glass);
   const drops = new THREE.Mesh(
     new THREE.PlaneGeometry(open.right - open.left, open.top - open.bottom),
     new THREE.MeshBasicMaterial({ map: dropsTexture(), transparent: true, opacity: 0.8, depthWrite: false }),
   );
   drops.position.set(0, (open.top + open.bottom) / 2, z - 0.005);
+  drops.renderOrder = 3;
   scene.add(drops);
+  const glassW = open.right - open.left;
+  const glassH = open.top - open.bottom;
+  const haze = createGlassHaze({ width: glassW, height: glassH });
+  haze.position.set(0, (open.top + open.bottom) / 2, z - 0.012);
+  scene.add(haze);
+  const runners = createGlassDrops({ width: glassW, height: glassH, count: desktop ? 34 : 18, random: seeded(53) });
+  runners.mesh.position.set(0, (open.top + open.bottom) / 2, z - 0.003);
+  scene.add(runners.mesh);
+  tickers.push((dt, t) => runners.tick(dt, t * motion));
 
   // LED strips: magenta along the ceiling edge, cyan under the sill.
   const strips = [
@@ -817,6 +918,30 @@ function addRoom(scene) {
   wash.position.set(0, open.top - 0.1, z + 0.6);
   scene.add(wash);
 
+  // The neon throws colour on the side walls, which are too far from any light to show it: a soft additive
+  // patch per wall, brightest at the window end. Cheaper than a light, and exactly where it is wanted.
+  const spill = haloTexture();
+  for (const [x, color, turn] of [
+    [room.left + 0.105, 0x49e7ff, Math.PI / 2],
+    [room.right - 0.105, 0xff4fd8, -Math.PI / 2],
+  ]) {
+    const patch = new THREE.Mesh(
+      new THREE.PlaneGeometry(6.4, 3.6),
+      new THREE.MeshBasicMaterial({
+        map: spill,
+        color,
+        transparent: true,
+        opacity: 0.16,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    patch.rotation.y = turn;
+    patch.position.set(x, 1.9, z + 0.35);
+    scene.add(patch);
+  }
+
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(20, 12),
     new THREE.MeshStandardMaterial({ color: 0x0c0d12, roughness: 0.8 }),
@@ -828,13 +953,14 @@ function addRoom(scene) {
 }
 
 function addDesk(scene) {
+  // The wood stays out of the environment: its bump map turns even a faint reflection into watery marbling.
   const top = new THREE.Mesh(new RoundedBoxGeometry(4.6, 0.07, 2.9, 4, 0.02), woodMaterial());
   top.position.set(0, -0.035, 0.2);
   top.receiveShadow = true;
   top.castShadow = true;
   scene.add(top);
 
-  const steel = new THREE.MeshStandardMaterial({ color: 0x16181d, roughness: 0.38, metalness: 0.75 });
+  const steel = shiny(new THREE.MeshStandardMaterial({ color: 0x16181d, roughness: 0.38, metalness: 0.75 }), 0.5);
   for (const x of [-2.12, 2.12]) {
     for (const z of [-1.0, 1.4]) {
       const leg = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.83, 0.07), steel);
@@ -866,10 +992,10 @@ function addMac(scene, pickables) {
   const chinH = 0.3 * k;
   const cy = bottom + H / 2;
 
-  const back = new THREE.MeshStandardMaterial({ color: 0x4f78b0, roughness: 0.32, metalness: 0.65 });
-  const chin = new THREE.MeshStandardMaterial({ color: 0xb9cff0, roughness: 0.4, metalness: 0.3 });
-  const bezel = new THREE.MeshStandardMaterial({ color: 0xeef1f4, roughness: 0.3, metalness: 0.05 });
-  const alu = new THREE.MeshStandardMaterial({ map: brushedTexture(), color: 0x9fb6d4, roughness: 0.3, metalness: 0.85 });
+  const back = shiny(new THREE.MeshStandardMaterial({ color: 0x4f78b0, roughness: 0.32, metalness: 0.65 }), 0.8);
+  const chin = shiny(new THREE.MeshStandardMaterial({ color: 0xb9cff0, roughness: 0.4, metalness: 0.3 }), 0.4);
+  const bezel = shiny(new THREE.MeshStandardMaterial({ color: 0xeef1f4, roughness: 0.3, metalness: 0.05 }), 0.3);
+  const alu = shiny(new THREE.MeshStandardMaterial({ map: brushedTexture(), color: 0x9fb6d4, roughness: 0.3, metalness: 0.85 }), 0.25);
 
   const body = new THREE.Mesh(new RoundedBoxGeometry(W, H, D, 4, 0.024), back);
   body.position.set(0, cy, 0);
@@ -928,10 +1054,11 @@ function addMac(scene, pickables) {
   hinge.rotation.z = Math.PI / 2;
   hinge.position.copy(riseFrom);
   group.add(hinge);
+  contactShadow(group, 0.66, 0.5, { z: -0.06, margin: 0.09, strength: 0.6 });
 
   const logo = new THREE.Mesh(
     new THREE.PlaneGeometry(0.2, 0.2),
-    new THREE.MeshStandardMaterial({ map: appleTexture(), transparent: true, roughness: 0.2, metalness: 0.9, color: 0x6d8fc0 }),
+    shiny(new THREE.MeshStandardMaterial({ map: appleTexture(), transparent: true, roughness: 0.2, metalness: 0.9, color: 0x6d8fc0 }), 0.8),
   );
   logo.position.set(0, cy + 0.2 * k, -D / 2 - 0.0015);
   logo.rotation.y = Math.PI;
@@ -1015,8 +1142,9 @@ function addPhone(scene, pickables) {
   // once the camera is close to it, so the phone only leans back a little.
   group.position.set(-1.15, 0.008, 0.74);
   scene.add(group);
+  contactShadow(group, 0.34, 0.3, { y: -0.0068, margin: 0.07, strength: 0.55 });
 
-  const alu = new THREE.MeshStandardMaterial({ map: brushedTexture(), color: 0x9fa7b3, roughness: 0.3, metalness: 0.85 });
+  const alu = shiny(new THREE.MeshStandardMaterial({ map: brushedTexture(), color: 0x9fa7b3, roughness: 0.3, metalness: 0.85 }), 0.6);
   const base = new THREE.Mesh(new RoundedBoxGeometry(0.34, 0.018, 0.3, 2, 0.008), alu);
   base.position.y = 0.009;
   base.castShadow = true;
@@ -1042,7 +1170,7 @@ function addPhone(scene, pickables) {
 
   const body = new THREE.Mesh(
     new RoundedBoxGeometry(bw, bh, 0.036, 4, 0.03),
-    new THREE.MeshStandardMaterial({ color: 0x3a3f47, roughness: 0.28, metalness: 0.9 }),
+    shiny(new THREE.MeshStandardMaterial({ color: 0x3a3f47, roughness: 0.28, metalness: 0.9 }), 0.8),
   );
   body.position.set(0, bh / 2, -0.018);
   body.castShadow = true;
@@ -1123,6 +1251,7 @@ function addMat(scene) {
   mat.position.set(0.2, 0.004, 1.02);
   mat.receiveShadow = true;
   scene.add(mat);
+  contactShadow(scene, 2.3, 0.86, { x: 0.2, z: 1.02, margin: 0.07, strength: 0.5 });
 }
 
 function addKeyboard(scene, pickables) {
@@ -1134,12 +1263,16 @@ function addKeyboard(scene, pickables) {
 
   const width = 15 * KEY_U + 0.08;
   const depth = 5 * KEY_U + 0.08;
-  const shell = new THREE.MeshStandardMaterial({
-    map: brushedTexture(),
-    color: 0x7a818c,
-    roughness: 0.42,
-    metalness: 0.7,
-  });
+  // Rougher than the metal it looks like: the lamp's spot otherwise peaks into a white band along the front edge.
+  const shell = shiny(
+    new THREE.MeshStandardMaterial({
+      map: brushedTexture(),
+      color: 0x7a818c,
+      roughness: 0.52,
+      metalness: 0.7,
+    }),
+    0.5,
+  );
   const tray = new THREE.Mesh(new RoundedBoxGeometry(width, 0.05, depth, 3, 0.016), shell);
   tray.castShadow = true;
   tray.receiveShadow = true;
@@ -1160,10 +1293,11 @@ function addKeyboard(scene, pickables) {
     group.add(foot);
   }
 
+  // A little reflection on the keycaps: enough for a soft sheen on the top faces, not enough to lift the room's mood.
   const materials = {
-    alpha: new THREE.MeshStandardMaterial({ color: 0x2b2f35, roughness: 0.58, metalness: 0.05 }),
-    mod: new THREE.MeshStandardMaterial({ color: 0x40464e, roughness: 0.58, metalness: 0.05 }),
-    accent: new THREE.MeshStandardMaterial({ color: 0x3f9f4c, roughness: 0.5, metalness: 0.05 }),
+    alpha: shiny(new THREE.MeshStandardMaterial({ color: 0x2b2f35, roughness: 0.58, metalness: 0.05 }), 0.25),
+    mod: shiny(new THREE.MeshStandardMaterial({ color: 0x40464e, roughness: 0.58, metalness: 0.05 }), 0.25),
+    accent: shiny(new THREE.MeshStandardMaterial({ color: 0x3f9f4c, roughness: 0.5, metalness: 0.05 }), 0.3),
   };
 
   KEY_ROWS.forEach((row, r) => {
@@ -1184,6 +1318,9 @@ function addKeyboard(scene, pickables) {
     }
   });
 
+  // On the felt mat, not in the keyboard's tilted group, so it stays flat on the desk.
+  contactShadow(scene, 1.58, 0.58, { y: 0.0093, z: 1.0, margin: 0.06, strength: 0.55 });
+
   const plug = new THREE.Mesh(
     new RoundedBoxGeometry(0.08, 0.03, 0.05, 1, 0.008),
     new THREE.MeshStandardMaterial({ color: 0x15171a, roughness: 0.5 }),
@@ -1201,6 +1338,15 @@ function addKeyboard(scene, pickables) {
 }
 
 function keycapGeometry(units) {
+  // Most keys are one unit wide: they all share one geometry.
+  const cached = keycapCache.get(units);
+  if (cached) return cached;
+  const geometry = buildKeycap(units);
+  keycapCache.set(units, geometry);
+  return geometry;
+}
+
+function buildKeycap(units) {
   const w = units * KEY_U - KEY_GAP;
   const d = KEY_U - KEY_GAP;
   const geo = new RoundedBoxGeometry(w, KEY_H, d, 3, 0.009);
@@ -1219,25 +1365,24 @@ function keycapGeometry(units) {
 
 function addLegend(mesh, label, color) {
   if (!label) return;
+  // Keys with the same legend share one texture and one material, and every legend shares one plane.
   const key = `${label}|${color}`;
-  let map = legendCache.get(key);
-  if (!map) {
+  let material = legendCache.get(key);
+  if (!material) {
     const size = label.length > 3 ? 44 : label.length > 1 ? 52 : 72;
-    map = labelTexture(label, color, 256, 128, size);
-    legendCache.set(key, map);
-  }
-  const plane = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.064, 0.032),
-    new THREE.MeshStandardMaterial({
-      map,
+    material = new THREE.MeshStandardMaterial({
+      map: labelTexture(label, color, 256, 128, size),
       transparent: true,
       alphaTest: 0.3,
       roughness: 0.6,
       polygonOffset: true,
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -2,
-    }),
-  );
+    });
+    legendCache.set(key, material);
+  }
+  legendPlane ??= new THREE.PlaneGeometry(0.064, 0.032);
+  const plane = new THREE.Mesh(legendPlane, material);
   plane.rotation.x = -Math.PI / 2;
   plane.position.y = KEY_H + 0.0008;
   plane.raycast = () => {};
@@ -1250,6 +1395,8 @@ function addMouse(scene, pickables) {
   group.position.set(1.12, 0.008, 1.04);
   group.rotation.y = 0.1;
   scene.add(group);
+  // Child of the mouse, so the pad follows it around the mat.
+  contactShadow(group, 0.274, 0.504, { y: 0.0012, round: true, margin: 0.06, strength: 0.6 });
 
   const geo = ellipsoid(0.135, 0.05, 0.25, 48, 28);
   // Narrow the front a little and keep the highest point towards the palm.
@@ -1270,7 +1417,7 @@ function addMouse(scene, pickables) {
   group.add(clicker);
   const shell = new THREE.Mesh(
     geo,
-    new THREE.MeshPhysicalMaterial({ color: 0xf4f6f8, roughness: 0.18, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08 }),
+    shiny(new THREE.MeshPhysicalMaterial({ color: 0xf4f6f8, roughness: 0.18, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08 }), 0.35),
   );
   shell.position.z = -0.22;
   shell.castShadow = true;
@@ -1278,7 +1425,7 @@ function addMouse(scene, pickables) {
 
   const base = new THREE.Mesh(
     ellipsoid(0.137, 0.016, 0.252, 48, 12),
-    new THREE.MeshStandardMaterial({ color: 0xa9c2e2, roughness: 0.35, metalness: 0.5 }),
+    shiny(new THREE.MeshStandardMaterial({ color: 0xa9c2e2, roughness: 0.35, metalness: 0.5 }), 0.4),
   );
   base.position.y = 0.004;
   group.add(base);
@@ -1369,9 +1516,10 @@ function addLamp(scene, pickables) {
   const group = new THREE.Group();
   group.position.set(-1.62, 0, 0.08);
   scene.add(group);
+  contactShadow(group, 0.36, 0.36, { round: true, margin: 0.08, strength: 0.6 });
 
-  const metal = new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.38, metalness: 0.75 });
-  const brass = new THREE.MeshStandardMaterial({ color: 0xb08a4a, roughness: 0.3, metalness: 0.9 });
+  const metal = shiny(new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.38, metalness: 0.75 }), 0.7);
+  const brass = shiny(new THREE.MeshStandardMaterial({ color: 0xb08a4a, roughness: 0.3, metalness: 0.9 }), 0.8);
   const parts = [];
 
   const base = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.17, 0.04, 40), metal);
@@ -1428,6 +1576,47 @@ function addLamp(scene, pickables) {
   group.add(spot, target);
   spot.target = target;
 
+  // The beam in the air: a hollow cone from the bulb to the pool of light. It is brightest across the middle of
+  // its body and fades to nothing at its rim and towards the desk, so no hard edge ever shows.
+  const beamLength = bulb.position.distanceTo(aim) * 0.98;
+  const beamMaterial = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: { uColor: { value: new THREE.Color(0xffd6a0) }, uLevel: { value: 0 } },
+    vertexShader: /* glsl */ `
+      varying vec3 vNormal;
+      varying vec3 vView;
+      varying float vAxis;
+      void main() {
+        vec4 view = modelViewMatrix * vec4(position, 1.0);
+        vNormal = normalize(normalMatrix * normal);
+        vView = normalize(-view.xyz);
+        // 0 at the bulb, 1 at the far end (ConeGeometry maps v = 1 at the apex).
+        vAxis = 1.0 - uv.y;
+        gl_Position = projectionMatrix * view;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uColor;
+      uniform float uLevel;
+      varying vec3 vNormal;
+      varying vec3 vView;
+      varying float vAxis;
+      void main() {
+        float facing = abs(dot(normalize(vNormal), normalize(vView)));
+        float body = pow(facing, 2.2);
+        float along = pow(1.0 - vAxis, 1.4) * smoothstep(0.0, 0.1, vAxis);
+        gl_FragColor = vec4(uColor * (0.5 * body * along * uLevel), 1.0);
+      }
+    `,
+  });
+  const beam = new THREE.Mesh(new THREE.ConeGeometry(Math.tan(0.4) * beamLength, beamLength, 48, 1, true), beamMaterial);
+  beam.position.copy(bulb.position).addScaledVector(dir, beamLength / 2);
+  beam.quaternion.copy(turn);
+  beam.raycast = () => {};
+  parts.push(beam);
+
   const hit = new THREE.Mesh(
     new THREE.CylinderGeometry(0.22, 0.22, 1.05, 12),
     new THREE.MeshBasicMaterial({ visible: false }),
@@ -1449,6 +1638,9 @@ function addLamp(scene, pickables) {
     const goal = state.on ? 1 : 0;
     state.level += (goal - state.level) * (reduceMotion ? 1 : Math.min(1, dt * 9));
     spot.intensity = 14 * state.level;
+    beamMaterial.uniforms.uLevel.value = state.level;
+    // The party colours the spot; the beam follows it.
+    beamMaterial.uniforms.uColor.value.copy(spot.color);
     bulbMat.emissiveIntensity = 0.05 + 3 * state.level;
     innerMat.emissiveIntensity = 0.02 + 0.6 * state.level;
   });
@@ -1468,6 +1660,7 @@ function addCat(scene, pickables) {
   root.position.set(1.72, 0, 0.4);
   root.rotation.y = -0.35;
   scene.add(root);
+  contactShadow(root, 0.7, 0.7, { round: true, margin: 0.12, strength: 0.6 });
 
   const fabric = new THREE.MeshStandardMaterial({ map: feltTexture("#3b2d5c"), roughness: 0.95 });
   const cushion = new THREE.Mesh(new THREE.CylinderGeometry(0.33, 0.35, 0.07, 48), fabric);
@@ -1751,8 +1944,9 @@ function addCat(scene, pickables) {
     if (state.heart < 1) {
       state.heart = Math.min(1, state.heart + dt / 1.4);
       heart.visible = true;
-      heart.position.set(0.18, 0.36 + state.heart * 0.22, 0.08);
-      heart.scale.setScalar(0.08 + state.heart * 0.04);
+      // Under reduced motion the heart fades in place instead of floating up.
+      heart.position.set(0.18, 0.36 + (reduceMotion ? 0.11 : state.heart * 0.22), 0.08);
+      heart.scale.setScalar(reduceMotion ? 0.1 : 0.08 + state.heart * 0.04);
       heart.material.opacity = Math.sin(state.heart * Math.PI);
     } else {
       heart.visible = false;
@@ -1761,6 +1955,8 @@ function addCat(scene, pickables) {
 }
 
 // Shell fur: the skin plus stacked offset copies that keep fewer and fewer strands, so hairs taper to tips.
+// The copies are one instanced mesh: every instance is the same geometry, and the vertex shader pushes it out
+// along the normals by its own layer height, so a coat is one draw call instead of one per layer.
 function addFur(parent, geometry, { coat, length, layers, repeat }) {
   const strands = furNoise().clone();
   strands.repeat.set(repeat[0], repeat[1]);
@@ -1773,34 +1969,36 @@ function addFur(parent, geometry, { coat, length, layers, repeat }) {
   skin.receiveShadow = true;
   parent.add(skin);
 
-  const base = geometry.attributes.position;
-  const normal = geometry.attributes.normal;
-  for (let i = 1; i <= layers; i += 1) {
-    const h = i / layers;
-    const shell = geometry.clone();
-    const pos = shell.attributes.position;
-    for (let v = 0; v < pos.count; v += 1) {
-      pos.setXYZ(
-        v,
-        base.getX(v) + normal.getX(v) * length * h,
-        base.getY(v) + normal.getY(v) * length * h - length * 0.25 * h * h,
-        base.getZ(v) + normal.getZ(v) * length * h,
+  const shellGeometry = geometry.clone();
+  const heights = new Float32Array(layers);
+  for (let i = 0; i < layers; i += 1) heights[i] = (i + 1) / layers;
+  shellGeometry.setAttribute("aLayer", new THREE.InstancedBufferAttribute(heights, 1));
+
+  const material = new THREE.MeshStandardMaterial({ map: coat, alphaMap: strands, roughness: 1 });
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uFurLength = { value: length };
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute float aLayer;\nvarying float vLayer;\nuniform float uFurLength;")
+      .replace(
+        "#include <begin_vertex>",
+        "#include <begin_vertex>\nvLayer = aLayer;\ntransformed += objectNormal * uFurLength * aLayer;\ntransformed.y -= uFurLength * 0.25 * aLayer * aLayer;",
       );
-    }
-    const shade = 0.45 + 0.55 * h;
-    const mesh = new THREE.Mesh(
-      shell,
-      new THREE.MeshStandardMaterial({
-        map: coat,
-        alphaMap: strands,
-        alphaTest: Math.min(0.96, 0.06 + h * 0.9),
-        color: new THREE.Color(shade, shade, shade),
-        roughness: 1,
-      }),
-    );
-    mesh.receiveShadow = true;
-    parent.add(mesh);
-  }
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nvarying float vLayer;")
+      // Inner layers are darker, like the roots of a coat.
+      .replace("#include <color_fragment>", "#include <color_fragment>\ndiffuseColor.rgb *= 0.45 + 0.55 * vLayer;")
+      // Higher layers keep fewer strands: the cut-off rises with the layer height.
+      .replace("#include <alphatest_fragment>", "if (diffuseColor.a < min(0.96, 0.06 + vLayer * 0.9)) discard;");
+  };
+  material.customProgramCacheKey = () => "fur-shell";
+
+  const shells = new THREE.InstancedMesh(shellGeometry, material, layers);
+  const identity = new THREE.Matrix4();
+  for (let i = 0; i < layers; i += 1) shells.setMatrixAt(i, identity);
+  // The shells grow past the skin by up to `length`, outside the bounds the geometry reports.
+  shells.frustumCulled = false;
+  shells.receiveShadow = true;
+  parent.add(shells);
 }
 
 function ellipsoid(rx, ry, rz, ws = 32, hs = 20, poles = "y") {
@@ -1879,17 +2077,25 @@ function taperedTube(curve, segments, radial, r0, r1) {
   return geo;
 }
 
+// The skyline: three layers of towers behind the window. Every tower is baked into one of four merged meshes
+// (one per facade texture), the neon trim into a fifth and the rooftop metal into a sixth, so the whole city
+// costs a handful of draw calls where it used to cost well over a hundred.
 function addCity(scene) {
   const rand = seeded(11);
-  const blink = [];
+  // Roof tiers and water tanks draw from their own stream, so adding them does not move a single tower.
+  const extra = seeded(97);
+  const beacons = [];
   const layers = [
     { z: -8, depth: 1.4, count: 8, spread: 24, base: -9, top: [-0.6, 1.6], width: [1.4, 2.4], glow: 0.8, neon: 0.6 },
     { z: -13, depth: 2, count: 15, spread: 36, base: -9, top: [0.2, 3.4], width: [1.3, 2.6], glow: 0.65, neon: 0.35 },
     { z: -21, depth: 3, count: 24, spread: 54, base: -9, top: [1, 6.5], width: [1.4, 3], glow: 0.5, neon: 0.2 },
   ];
   const neonColors = [0x49e7ff, 0xff4fd8, 0xffc14a, 0x7cff6b, 0xa27dff];
-  const antennaMat = new THREE.MeshStandardMaterial({ color: 0x1a1e26, roughness: 0.6, metalness: 0.5 });
-  const facades = [0x7c889c, 0x6d7a90, 0x8d97a8, 0x7a7090].map((tint) => facadeMaterial(tint));
+  const metalMat = new THREE.MeshStandardMaterial({ color: 0x1a1e26, roughness: 0.6, metalness: 0.5 });
+  const facades = [0x7c889c, 0x6d7a90, 0x8d97a8, 0x7a7090].map((tint) => cityGlow(facadeMaterial(tint)));
+  const towers = facades.map(() => []);
+  const trim = [];
+  const metal = [];
 
   for (const layer of layers) {
     for (let i = 0; i < layer.count; i += 1) {
@@ -1900,51 +2106,136 @@ function addCity(scene) {
       const w = lerp(layer.width[0], layer.width[1], rand());
       const d = layer.depth * (0.7 + rand() * 0.6);
       const h = top - layer.base;
-      const geo = new THREE.BoxGeometry(w, h, d);
-      worldUV(geo, w, h, d, 2.6);
-      const material = facades[Math.floor(rand() * facades.length)].clone();
-      material.emissiveIntensity = layer.glow * (0.6 + rand() * 0.6);
-      const building = new THREE.Mesh(geo, material);
+      const pick = Math.floor(rand() * facades.length);
+      const glow = layer.glow * (0.6 + rand() * 0.6);
       const z = layer.z - rand() * 1.5;
-      building.position.set(x, layer.base + h / 2, z);
-      scene.add(building);
+      towers[pick].push(towerGeometry(w, h, d, x, layer.base + h / 2, z, glow, top));
 
       if (rand() < layer.neon) {
-        const color = neonColors[Math.floor(rand() * neonColors.length)];
-        const strip = new THREE.Mesh(
-          new THREE.BoxGeometry(0.07, Math.min(h * 0.5, 3.4), 0.03),
-          new THREE.MeshBasicMaterial({ color, toneMapped: false }),
-        );
-        strip.position.set(x + (rand() - 0.5) * w * 0.7, top - Math.min(h * 0.25, 1.9) - 0.2, z + d / 2 + 0.03);
-        scene.add(strip);
-        const crown = new THREE.Mesh(
-          new THREE.BoxGeometry(w * 0.98, 0.05, 0.03),
-          new THREE.MeshBasicMaterial({ color, toneMapped: false }),
-        );
-        crown.position.set(x, top - 0.08, z + d / 2 + 0.03);
-        scene.add(crown);
+        const color = new THREE.Color(neonColors[Math.floor(rand() * neonColors.length)]);
+        const strip = new THREE.BoxGeometry(0.07, Math.min(h * 0.5, 3.4), 0.03);
+        strip.translate(x + (rand() - 0.5) * w * 0.7, top - Math.min(h * 0.25, 1.9) - 0.2, z + d / 2 + 0.03);
+        trim.push(paintGeometry(strip, color));
+        const crown = new THREE.BoxGeometry(w * 0.98, 0.05, 0.03);
+        crown.translate(x, top - 0.08, z + d / 2 + 0.03);
+        trim.push(paintGeometry(crown, color));
       }
       if (rand() < 0.45) {
-        const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.03, 0.9, 6), antennaMat);
-        mast.position.set(x + (rand() - 0.5) * w * 0.5, top + 0.45, z);
-        scene.add(mast);
-        const light = new THREE.Mesh(
-          new THREE.SphereGeometry(0.05, 8, 6),
-          new THREE.MeshBasicMaterial({ color: 0xff2a2a, toneMapped: false }),
-        );
-        light.position.set(mast.position.x, top + 0.92, z);
-        light.userData.phase = rand() * Math.PI * 2;
-        scene.add(light);
-        blink.push(light);
+        const mastX = x + (rand() - 0.5) * w * 0.5;
+        metal.push(new THREE.CylinderGeometry(0.02, 0.03, 0.9, 6).translate(mastX, top + 0.45, z));
+        beacons.push({ x: mastX, y: top + 0.92, z, phase: rand() * Math.PI * 2 });
+      }
+
+      // A setback on the roof breaks the flat box, and a water tank on legs gives some skylines a second silhouette.
+      if (h > 4 && extra() < 0.55) {
+        const tw = w * lerp(0.45, 0.75, extra());
+        const td = d * lerp(0.45, 0.75, extra());
+        const th = lerp(0.3, 1.1, extra());
+        const tx = x + (extra() - 0.5) * (w - tw) * 0.6;
+        const tz = z + (extra() - 0.5) * (d - td) * 0.4;
+        towers[pick].push(towerGeometry(tw, th, td, tx, top + th / 2, tz, glow, top + th));
+      }
+      if (extra() < 0.22) {
+        const tx = x + (extra() - 0.5) * w * 0.5;
+        const radius = lerp(0.14, 0.22, extra());
+        metal.push(new THREE.BoxGeometry(radius * 1.1, 0.34, radius * 1.1).translate(tx, top + 0.17, z));
+        metal.push(new THREE.CylinderGeometry(radius, radius, 0.4, 10).translate(tx, top + 0.54, z));
+        metal.push(new THREE.ConeGeometry(radius * 1.06, 0.14, 10).translate(tx, top + 0.81, z));
       }
     }
   }
-  tickers.push((dt, t) => {
-    for (const light of blink) {
-      const on = motion ? Math.sin(t * 2.2 + light.userData.phase) > 0.2 : true;
-      light.visible = on;
-    }
+
+  towers.forEach((list, i) => {
+    if (list.length) scene.add(new THREE.Mesh(mergedGeometry(list), facades[i]));
   });
+  if (trim.length) {
+    scene.add(new THREE.Mesh(mergedGeometry(trim), new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false })));
+  }
+  if (metal.length) scene.add(new THREE.Mesh(mergedGeometry(metal), metalMat));
+
+  // Aviation lights on the masts: soft red dots that fade in and out instead of popping.
+  const red = new THREE.Color(0xff2a2a);
+  const positions = new Float32Array(beacons.length * 3);
+  const colors = new Float32Array(beacons.length * 3);
+  beacons.forEach((b, i) => {
+    positions.set([b.x, b.y, b.z], i * 3);
+    colors.set([red.r, red.g, red.b], i * 3);
+  });
+  const dots = new THREE.BufferGeometry();
+  dots.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  const dotColors = new THREE.BufferAttribute(colors, 3);
+  dots.setAttribute("color", dotColors);
+  scene.add(
+    new THREE.Points(
+      dots,
+      new THREE.PointsMaterial({
+        map: dotTexture(),
+        vertexColors: true,
+        size: 0.5,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
+        fog: false,
+      }),
+    ),
+  );
+  tickers.push((dt, t) => {
+    beacons.forEach((b, i) => {
+      const on = motion ? smoothstep(0.1, 0.35, Math.sin(t * 2.2 + b.phase)) : 1;
+      dotColors.setXYZ(i, red.r * on, red.g * on, red.b * on);
+    });
+    dotColors.needsUpdate = true;
+  });
+}
+
+// A tower with window UVs in world units and a per-vertex glow that fades towards the street, so the lower floors
+// sink into shadow instead of every facade burning evenly down to the base.
+function towerGeometry(w, h, d, x, y, z, glow, top) {
+  const geometry = new THREE.BoxGeometry(w, h, d, 1, 6, 1);
+  worldUV(geometry, w, h, d, 2.6);
+  geometry.translate(x, y, z);
+  const pos = geometry.attributes.position;
+  const levels = new Float32Array(pos.count);
+  for (let i = 0; i < pos.count; i += 1) levels[i] = glow * lerp(0.45, 1.15, smoothstep(-5, top, pos.getY(i)));
+  geometry.setAttribute("aGlow", new THREE.BufferAttribute(levels, 1));
+  return geometry;
+}
+
+// Gives every vertex of a geometry the same colour, for meshes that share one material but not one tint.
+function paintGeometry(geometry, color) {
+  const count = geometry.attributes.position.count;
+  const colors = new Float32Array(count * 3);
+  for (let i = 0; i < count; i += 1) colors.set([color.r, color.g, color.b], i * 3);
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  return geometry;
+}
+
+function mergedGeometry(list) {
+  const merged = mergeBuffers(list.map((g) => ({ attributes: g.attributes, index: g.index.array })));
+  const geometry = new THREE.BufferGeometry();
+  for (const [name, { array, itemSize }] of Object.entries(merged.attributes)) {
+    geometry.setAttribute(name, new THREE.BufferAttribute(array, itemSize));
+  }
+  geometry.setIndex(new THREE.BufferAttribute(merged.index, 1));
+  for (const g of list) g.dispose();
+  return geometry;
+}
+
+// Scales the emissive window light by the per-vertex glow of towerGeometry.
+function cityGlow(material) {
+  // The per-vertex glow carries the whole intensity (layer glow, tower variation, fade to the street).
+  material.emissiveIntensity = 1;
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute float aGlow;\nvarying float vGlow;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvGlow = aGlow;");
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nvarying float vGlow;")
+      .replace("#include <emissivemap_fragment>", "#include <emissivemap_fragment>\ntotalEmissiveRadiance *= vGlow;");
+  };
+  material.customProgramCacheKey = () => "city-glow";
+  return material;
 }
 
 function addSearchlights(scene) {
@@ -2023,10 +2314,12 @@ function adScreen() {
   let caption = "github.com/Renfild";
   let acc = 1;
   // Swap the slogan for the latest public commits when GitHub answers; keep the slogan otherwise.
-  latestCommits().then((commits) => {
+  loadLatestCommits().then((commits) => {
     if (!commits.length) return;
     words = commits.map((c) => `${c.repo}: ${c.message} ▸ `).join("");
     caption = "live · последние коммиты на GitHub";
+    // Without the ticker (reduced motion) nothing else redraws the canvas, so paint the commits once.
+    if (!motion) draw(0);
   });
   const draw = (t) => {
     const hue = (t * 18) % 360;
@@ -2052,33 +2345,12 @@ function adScreen() {
   tickers.push((dt, t) => {
     if (!motion) return;
     acc += dt;
-    if (acc < 1 / 24) return;
+    // About 15 redraws a second: the feed scrolls slowly, and the billboard is often off-screen.
+    if (acc < 1 / 15) return;
     acc = 0;
     draw(t);
   });
   return texture;
-}
-
-async function latestCommits() {
-  try {
-    const response = await fetch("https://api.github.com/users/Renfild/events/public?per_page=40", {
-      headers: { Accept: "application/vnd.github+json" },
-    });
-    if (!response.ok) return [];
-    const events = await response.json();
-    const commits = [];
-    for (const event of events) {
-      if (event.type !== "PushEvent") continue;
-      const repo = String(event.repo?.name ?? "").split("/").pop();
-      for (const commit of event.payload?.commits ?? []) {
-        const message = String(commit.message ?? "").split("\n")[0].trim();
-        if (message) commits.push({ repo, message: message.length > 46 ? `${message.slice(0, 45)}…` : message });
-      }
-    }
-    return commits.slice(0, 6);
-  } catch {
-    return [];
-  }
 }
 
 function addBillboard(scene, screen) {
@@ -2213,7 +2485,8 @@ function addCoffee(scene) {
   mug.position.set(0.82, 0, 0.36);
   mug.visible = false;
   scene.add(mug);
-  const ceramic = new THREE.MeshStandardMaterial({ color: 0xeeeae2, roughness: 0.35 });
+  contactShadow(mug, 0.15, 0.15, { round: true, margin: 0.05, strength: 0.5 });
+  const ceramic = shiny(new THREE.MeshStandardMaterial({ color: 0xeeeae2, roughness: 0.35 }), 0.4);
   const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.065, 0.17, 32, 1, true), ceramic);
   cup.position.y = 0.085;
   cup.castShadow = true;
@@ -2258,7 +2531,8 @@ function addCoffee(scene) {
       mug.visible = true;
       state.pop = 0;
     }
-    state.steam = 45;
+    // Under reduced motion the steam hangs still for a shorter while instead of drifting.
+    state.steam = reduceMotion ? 15 : 45;
   });
   tickers.push((dt, t) => {
     if (!mug.visible) return;
@@ -2267,7 +2541,7 @@ function addCoffee(scene) {
     state.steam = Math.max(0, state.steam - dt);
     const strength = Math.min(1, state.steam / 5);
     for (const puff of puffs) {
-      const p = (t * 0.35 * (motion || 0.2) + puff.userData.phase) % 1;
+      const p = (t * 0.35 * motion + puff.userData.phase) % 1;
       puff.position.set(Math.sin(p * 6 + puff.userData.phase * 9) * 0.03, 0.17 + p * 0.35, 0);
       puff.scale.setScalar(0.05 + p * 0.12);
       puff.material.opacity = Math.sin(p * Math.PI) * 0.35 * strength;
@@ -2290,6 +2564,9 @@ function addParty() {
     party.signs.forEach((sign, i) => {
       if (done) sign.material.color.copy(white);
       else sign.material.color.setHSL((t * speed * 0.3 + i * 0.15) % 1, 1, 0.65);
+      // The halo glows in whatever colour the sign has right now, and goes back to its own when the party ends.
+      const halo = sign.userData.halo;
+      if (halo) halo.material.color.copy(done ? halo.userData.base : sign.material.color);
     });
     for (const light of party.lights) {
       if (done) light.color.copy(lampColor);
@@ -2301,12 +2578,31 @@ function addParty() {
 function addSigns(scene, pickables) {
   const group = new THREE.Group();
   scene.add(group);
+  const glow = haloTexture();
   const signs = SIGNS.map(([title, command, color, x, y, z], index) => {
     const material = signMaterial(title, color);
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 0.42), material);
+    // A soft halo behind the tube: bloom only lifts what is already bright, this is the light the sign throws
+    // into the rain around it. A child of the sign, so it bobs, flickers and grows on hover together with it.
+    const halo = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: glow,
+        color,
+        transparent: true,
+        opacity: HALO_OPACITY,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    halo.scale.set(2.05, 1.12, 1);
+    halo.position.set(0, 0, -0.05);
+    halo.userData.base = new THREE.Color(color);
+    mesh.add(halo);
     mesh.position.set(x, y, z);
     mesh.userData = {
       command,
+      halo,
       baseY: y,
       phase: index * 0.7,
       onHover: (on) => mesh.scale.setScalar(on ? 1.07 : 1),
@@ -2331,11 +2627,14 @@ function addSigns(scene, pickables) {
       flicker.left -= dt;
       const dim = flicker.left > 0 && Math.sin(flicker.left * 60) > 0;
       flicker.sign.material.opacity = dim ? 0.35 : 1;
+      flicker.sign.userData.halo.material.opacity = HALO_OPACITY * (dim ? 0.35 : 1);
       if (flicker.left <= 0) flicker.sign = null;
     }
   });
 }
 
+// Traffic between the towers. Twelve cars share five instanced meshes (body, cabin, two lights, light trail)
+// instead of owning five meshes each; their matrices are rewritten while they drive.
 function addCars(scene) {
   const rand = seeded(5);
   const lanes = [
@@ -2346,93 +2645,106 @@ function addCars(scene) {
     { y: 2.6, z: -10, dir: 1, speed: 0.9 },
     { y: 5.2, z: -12, dir: -1, speed: 1.1 },
   ];
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x151a22, roughness: 0.35, metalness: 0.7 });
-  const cabinMat = new THREE.MeshStandardMaterial({ color: 0x0a1420, emissive: 0x2a6aa8, emissiveIntensity: 0.6, roughness: 0.2 });
-  const head = new THREE.MeshBasicMaterial({ color: 0xfff4dc, toneMapped: false });
-  const tail = new THREE.MeshBasicMaterial({ color: 0xff2b4a, toneMapped: false });
-  const trailTex = gradientTexture(true);
   const cars = [];
   for (const lane of lanes) {
     for (let n = 0; n < 2; n += 1) {
-      const car = new THREE.Group();
-      const body = new THREE.Mesh(new RoundedBoxGeometry(0.62, 0.12, 0.26, 2, 0.04), bodyMat);
-      const cabin = new THREE.Mesh(new RoundedBoxGeometry(0.3, 0.08, 0.2, 2, 0.03), cabinMat);
-      cabin.position.set(-0.03 * lane.dir, 0.08, 0);
-      const front = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.2), head);
-      front.position.set(0.31 * lane.dir, 0, 0);
-      const back = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.035, 0.22), tail);
-      back.position.set(-0.31 * lane.dir, 0.01, 0);
-      const trail = new THREE.Mesh(
-        new THREE.PlaneGeometry(1.4, 0.035),
-        new THREE.MeshBasicMaterial({
-          color: 0xff2b4a,
-          map: trailTex,
-          transparent: true,
-          blending: THREE.AdditiveBlending,
-          depthWrite: false,
-          toneMapped: false,
-        }),
-      );
-      trail.position.set(-1.0 * lane.dir, 0.01, 0);
-      if (lane.dir < 0) trail.rotation.z = Math.PI;
-      car.add(body, cabin, front, back, trail);
-      car.position.set(-14 + rand() * 28, lane.y, lane.z);
-      car.userData = { ...lane, baseY: lane.y, speed: lane.speed * (0.8 + rand() * 0.4), phase: rand() * 6 };
-      scene.add(car);
-      cars.push(car);
+      cars.push({
+        x: -14 + rand() * 28,
+        y: lane.y,
+        z: lane.z,
+        dir: lane.dir,
+        baseY: lane.y,
+        speed: lane.speed * (0.8 + rand() * 0.4),
+        phase: rand() * 6,
+      });
     }
   }
+
+  const trailTexture = gradientTexture(true);
+  // Offsets are in the car's own frame and flip with its direction of travel.
+  const parts = [
+    {
+      geometry: new RoundedBoxGeometry(0.62, 0.12, 0.26, 2, 0.04),
+      material: new THREE.MeshStandardMaterial({ color: 0x151a22, roughness: 0.35, metalness: 0.7 }),
+      offset: () => [0, 0, 0],
+    },
+    {
+      geometry: new RoundedBoxGeometry(0.3, 0.08, 0.2, 2, 0.03),
+      material: new THREE.MeshStandardMaterial({ color: 0x0a1420, emissive: 0x2a6aa8, emissiveIntensity: 0.6, roughness: 0.2 }),
+      offset: (dir) => [-0.03 * dir, 0.08, 0],
+    },
+    {
+      geometry: new THREE.BoxGeometry(0.03, 0.03, 0.2),
+      material: new THREE.MeshBasicMaterial({ color: 0xfff4dc, toneMapped: false }),
+      offset: (dir) => [0.31 * dir, 0, 0],
+    },
+    {
+      geometry: new THREE.BoxGeometry(0.03, 0.035, 0.22),
+      material: new THREE.MeshBasicMaterial({ color: 0xff2b4a, toneMapped: false }),
+      offset: (dir) => [-0.31 * dir, 0.01, 0],
+    },
+    {
+      geometry: new THREE.PlaneGeometry(1.4, 0.035),
+      material: new THREE.MeshBasicMaterial({
+        color: 0xff2b4a,
+        map: trailTexture,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+      offset: (dir) => [-1.0 * dir, 0.01, 0],
+      // The gradient fades away from the car: cars driving left turn the strip around.
+      turnsAround: true,
+    },
+  ].map((part) => {
+    const mesh = new THREE.InstancedMesh(part.geometry, part.material, cars.length);
+    // The cars sweep across the whole window and past it, far beyond the bounds of any one instance.
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+    return { ...part, mesh };
+  });
+
+  const matrix = new THREE.Matrix4();
+  const position = new THREE.Vector3();
+  const straight = new THREE.Quaternion();
+  const turned = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI);
+  const unit = new THREE.Vector3(1, 1, 1);
+  function place() {
+    cars.forEach((car, i) => {
+      for (const part of parts) {
+        const [ox, oy, oz] = part.offset(car.dir);
+        position.set(car.x + ox, car.y + oy, car.z + oz);
+        matrix.compose(position, part.turnsAround && car.dir < 0 ? turned : straight, unit);
+        part.mesh.setMatrixAt(i, matrix);
+      }
+    });
+    for (const part of parts) part.mesh.instanceMatrix.needsUpdate = true;
+  }
+  place();
+
   tickers.push((dt, t) => {
+    // Under reduced motion the traffic stands where it was placed.
+    if (!motion) return;
     for (const car of cars) {
-      const data = car.userData;
-      car.position.x += data.dir * data.speed * dt * motion;
-      car.position.y = data.baseY + Math.sin(t * 1.4 + data.phase) * 0.05 * motion;
-      if (car.position.x > 14) car.position.x = -14;
-      if (car.position.x < -14) car.position.x = 14;
+      car.x += car.dir * car.speed * dt;
+      car.y = car.baseY + Math.sin(t * 1.4 + car.phase) * 0.05;
+      if (car.x > 14) car.x = -14;
+      if (car.x < -14) car.x = 14;
     }
+    place();
   });
 }
 
 function addRain(scene) {
-  const count = desktop ? 1100 : 500;
-  const length = 0.22;
-  const positions = new Float32Array(count * 6);
-  for (let i = 0; i < count; i += 1) {
-    const x = (Math.random() - 0.5) * 16;
-    const y = -3 + Math.random() * 10;
-    const z = -2.2 - Math.random() * 8;
-    positions.set([x, y, z, x + 0.03, y + length, z], i * 6);
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  const rain = new THREE.LineSegments(
-    geometry,
-    new THREE.LineBasicMaterial({ color: 0xa8c8ff, transparent: true, opacity: 0.32, depthWrite: false }),
-  );
-  rain.frustumCulled = false;
-  scene.add(rain);
-  const attr = geometry.attributes.position;
-  tickers.push((dt) => {
-    if (!motion) return;
-    const fall = 7.5 * dt;
-    const drift = 0.9 * dt;
-    const array = attr.array;
-    for (let i = 0; i < count; i += 1) {
-      const o = i * 6;
-      array[o] -= drift;
-      array[o + 3] -= drift;
-      array[o + 1] -= fall;
-      array[o + 4] -= fall;
-      if (array[o + 1] < -3) {
-        const x = (Math.random() - 0.5) * 16;
-        array[o] = x;
-        array[o + 3] = x + 0.03;
-        array[o + 1] = 7;
-        array[o + 4] = 7 + length;
-      }
-    }
-    attr.needsUpdate = true;
+  const rain = createRain({
+    count: desktop ? 1300 : 600,
+    fogDensity: scene.fog?.density ?? 0.026,
+    random: seeded(7),
   });
+  scene.add(rain.mesh);
+  // Under reduced motion the clock stays at zero and the streaks hang still.
+  tickers.push((dt, t) => rain.tick(dt, t * motion));
 }
 
 // ---------- materials and procedural textures ----------
@@ -2533,6 +2845,60 @@ function dotTexture() {
   return map;
 }
 
+
+// Soft footprints under the things on the desk. The moon's shadow map is too coarse to ground small objects,
+// so each one gets a faint dark pad: black inside its footprint, fading to nothing over `margin` metres.
+const padCache = new Map();
+
+function padTexture(w, d, margin, round, strength) {
+  const key = [w, d, margin, round, strength].join("|");
+  const cached = padCache.get(key);
+  if (cached) return cached;
+  const size = 96;
+  const padW = w + margin * 2;
+  const padD = d + margin * 2;
+  const data = new Uint8ClampedArray(size * size * 4);
+  for (let j = 0; j < size; j += 1) {
+    for (let i = 0; i < size; i += 1) {
+      const px = ((i + 0.5) / size * 2 - 1) * (padW / 2);
+      const pz = ((j + 0.5) / size * 2 - 1) * (padD / 2);
+      let dist;
+      if (round) {
+        dist = (Math.hypot(px / (w / 2), pz / (d / 2)) - 1) * (Math.min(w, d) / 2);
+      } else {
+        const qx = Math.abs(px) - w / 2;
+        const qz = Math.abs(pz) - d / 2;
+        dist = Math.hypot(Math.max(qx, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qz), 0);
+      }
+      const t = clamp01(1 - dist / margin);
+      data[(j * size + i) * 4 + 3] = t * t * (3 - 2 * t) * 255 * strength;
+    }
+  }
+  const texture = canvasTexture(imageCanvas(data, size), { srgb: true });
+  texture.anisotropy = 1;
+  padCache.set(key, texture);
+  return texture;
+}
+
+function contactShadow(parent, w, d, { x = 0, y = 0.0013, z = 0, margin = 0.07, strength = 0.55, round = false } = {}) {
+  const pad = new THREE.Mesh(
+    new THREE.PlaneGeometry(w + margin * 2, d + margin * 2),
+    new THREE.MeshBasicMaterial({
+      map: padTexture(w, d, margin, round, strength),
+      transparent: true,
+      depthWrite: false,
+      fog: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    }),
+  );
+  pad.rotation.x = -Math.PI / 2;
+  pad.position.set(x, y, z);
+  pad.raycast = () => {};
+  parent.add(pad);
+  return pad;
+}
 
 function woodMaterial() {
   const size = 1024;
@@ -2684,33 +3050,63 @@ function furNoise() {
   return cachedFur;
 }
 
+// Windows for a tower's wall: 13 columns by 13 rows per 2.6 m tile. Most floors are dark with a faint cool
+// reflection and the odd warm window; some floors are offices lit along their whole length.
 function facadeMaterial(tint) {
-  const size = 256;
+  const size = 512;
   const albedo = document.createElement("canvas");
   const glow = document.createElement("canvas");
   albedo.width = glow.width = size;
   albedo.height = glow.height = size;
   const actx = albedo.getContext("2d");
   const gctx = glow.getContext("2d");
-  actx.fillStyle = "#11151d";
+  actx.fillStyle = "#0f131b";
   actx.fillRect(0, 0, size, size);
   gctx.fillStyle = "#000";
   gctx.fillRect(0, 0, size, size);
-  const cell = 20;
-  const lit = ["#ffd9a0", "#ffe7c2", "#f3c77e", "#bfe3ff"];
-  for (let y = 4; y < size; y += cell) {
-    for (let x = 4; x < size; x += cell) {
+  const cell = 40;
+  const warm = ["#ffd9a0", "#ffe7c2", "#f3c77e", "#ffb870"];
+  const cool = ["#bfe3ff", "#d8efff", "#a8d4ff"];
+  for (let row = 0, y = 8; y < size; y += cell, row += 1) {
+    // The floor slab between two rows of windows.
+    actx.fillStyle = "#171d28";
+    actx.fillRect(0, y - 6, size, 3);
+    const office = hash2(row * 7 + tint, 5) > 0.8;
+    for (let x = 8; x < size; x += cell) {
       const h = hash2(x + tint, y);
-      actx.fillStyle = h > 0.5 ? "#1a222c" : "#151b24";
-      actx.fillRect(x, y, 12, 14);
-      if (h < 0.84) continue;
-      const color = lit[Math.floor(hash2(y, x) * lit.length)];
-      actx.fillStyle = color;
-      actx.fillRect(x, y, 12, 14);
+      const lit = office ? h > 0.4 : h > 0.86;
+      const pane = actx.createLinearGradient(0, y, 0, y + 28);
+      pane.addColorStop(0, "#1d2836");
+      pane.addColorStop(1, "#10161f");
+      actx.fillStyle = pane;
+      actx.fillRect(x, y, 24, 28);
+      if (!lit) continue;
+      const palette = office ? cool : warm;
+      const color = palette[Math.floor(hash2(y, x) * palette.length)];
+      const body = actx.createLinearGradient(0, y, 0, y + 28);
+      body.addColorStop(0, color);
+      body.addColorStop(1, office ? "#8fb4d8" : "#c98f4a");
+      actx.fillStyle = body;
+      actx.fillRect(x, y, 24, 28);
       gctx.fillStyle = color;
       gctx.globalAlpha = 0.45 + hash2(x * 3, y) * 0.55;
-      gctx.fillRect(x, y, 12, 14);
+      gctx.fillRect(x, y, 24, 28);
       gctx.globalAlpha = 1;
+      // Blinds half drawn, or a mullion down the middle, so the lit squares are not all the same square.
+      const detail = hash2(y * 5, x * 3);
+      if (detail > 0.62) {
+        for (let blind = y + 2; blind < y + 16; blind += 5) {
+          actx.fillStyle = "#1a1612";
+          actx.fillRect(x, blind, 24, 2);
+          gctx.fillStyle = "#000";
+          gctx.fillRect(x, blind, 24, 2);
+        }
+      } else if (detail < 0.3) {
+        actx.fillStyle = "#0b0f15";
+        actx.fillRect(x + 11, y, 2, 28);
+        gctx.fillStyle = "#000";
+        gctx.fillRect(x + 11, y, 2, 28);
+      }
     }
   }
   const map = canvasTexture(albedo, { srgb: true, repeat: [1, 1] });
@@ -2803,6 +3199,23 @@ function gradientDot() {
   g.addColorStop(1, "rgba(255,255,255,0)");
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 64, 64);
+  const map = new THREE.CanvasTexture(c);
+  map.colorSpace = THREE.SRGBColorSpace;
+  return map;
+}
+
+// A glow that drops off quickly: bright at the tube, a faint wash a sign's width away.
+function haloTexture() {
+  const c = document.createElement("canvas");
+  c.width = c.height = 128;
+  const ctx = c.getContext("2d");
+  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0, "rgba(255,255,255,1)");
+  g.addColorStop(0.22, "rgba(255,255,255,0.5)");
+  g.addColorStop(0.5, "rgba(255,255,255,0.12)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
   const map = new THREE.CanvasTexture(c);
   map.colorSpace = THREE.SRGBColorSpace;
   return map;

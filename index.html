@@ -21,6 +21,8 @@
     <link rel="stylesheet" href="css/terminal.css" />
     <link rel="stylesheet" href="css/scene.css" />
     <link rel="stylesheet" href="css/shop.css" />
+    <!-- Without JavaScript the power-on overlay would cover the page; the noscript message in #output shows instead. -->
+    <noscript><style>#boot { display: none; }</style></noscript>
     <script type="importmap">
       {
         "imports": {
@@ -77,7 +79,7 @@
       </div>
       <div class="scan" aria-hidden="true"></div>
       <div class="glare" aria-hidden="true"></div>
-      <div id="boot" class="boot" role="button" aria-label="Включить компьютер">
+      <div id="boot" class="boot">
         <div class="boot-power">
           <svg viewBox="0 0 48 48" width="64" height="64" aria-hidden="true"><path d="M24 6v16" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M14 12a15 15 0 1 0 20 0" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>
           <p>нажмите, чтобы включить</p>

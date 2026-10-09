@@ -42,6 +42,14 @@
   display: flex;
 }
 
+/* Full-width sheet on a phone: square corners, so the page behind does not show through them. */
+@media (max-width: 400px) {
+  .phone.is-sheet {
+    border-radius: 0;
+    box-shadow: none;
+  }
+}
+
 .shop {
   --bg: #000;
   --card: #0d0d0d;
@@ -49,6 +57,7 @@
   --dim: rgba(245, 245, 245, 0.55);
   --glass: rgba(255, 255, 255, 0.06);
   --border: rgba(255, 255, 255, 0.12);
+  --edge: rgba(255, 255, 255, 0.34);
   --accent: #fff;
   background: var(--bg);
   color: var(--fg);
@@ -61,6 +70,7 @@
   --dim: rgba(17, 17, 17, 0.55);
   --glass: rgba(0, 0, 0, 0.05);
   --border: rgba(0, 0, 0, 0.12);
+  --edge: rgba(0, 0, 0, 0.4);
   --accent: #000;
 }
 
@@ -147,8 +157,8 @@
 
 .shop-head small {
   color: var(--dim);
-  font-size: 11px;
-  letter-spacing: 0.45em;
+  font-size: 12px;
+  letter-spacing: 0.35em;
 }
 
 .shop-grid {
@@ -202,7 +212,7 @@
 }
 
 .shop-name {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.08em;
   overflow-wrap: anywhere;
@@ -215,10 +225,11 @@
 
 .shop-muted {
   color: var(--dim);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .shop-add {
+  position: relative;
   flex: none;
   width: 34px;
   height: 34px;
@@ -261,7 +272,7 @@
   height: 18px;
   padding: 0 5px;
   border-radius: 9px;
-  background: #ef4444;
+  background: #dc2626;
   color: #fff;
   font-size: 11px;
   line-height: 18px;
@@ -283,7 +294,7 @@
 
 .shop-back,
 .shop-ghost {
-  border: 1px solid var(--border);
+  border: 1px solid var(--edge);
   background: var(--glass);
   border-radius: 14px;
   padding: 8px 12px;
@@ -339,6 +350,11 @@
   outline: none;
 }
 
+.shop-promo:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .shop-total {
   display: flex;
   align-items: baseline;
@@ -353,7 +369,7 @@
 
 .shop-off {
   order: 1;
-  background: #22c55e;
+  background: #15803d;
   color: #fff;
   border-radius: 10px;
   padding: 2px 8px;
@@ -375,6 +391,10 @@
   opacity: 0.4;
 }
 
+.shop-cta:disabled {
+  cursor: default;
+}
+
 .shop-label {
   margin: 16px 0 8px;
   color: var(--dim);
@@ -390,7 +410,7 @@
 }
 
 .shop-chip {
-  border: 1px solid var(--border);
+  border: 1px solid var(--edge);
   background: var(--glass);
   border-radius: 12px;
   padding: 9px 12px;
@@ -445,7 +465,7 @@
   border-radius: 50%;
   display: grid;
   place-items: center;
-  background: #22c55e;
+  background: #15803d;
   color: #fff;
   font-size: 32px;
   animation: shop-bump 0.5s ease;
@@ -477,7 +497,7 @@
   display: block;
   text-align: right;
   color: #6ab3f3;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .shop-foot {
@@ -490,23 +510,51 @@
 
 .shop-icon {
   position: relative;
+  display: grid;
+  place-items: center;
   width: 40px;
   height: 40px;
   border-radius: 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--edge);
   background: var(--glass);
+  font-size: 18px;
+  line-height: 1;
 }
 
 .shop-src {
   margin-left: auto;
   color: var(--dim);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 @keyframes shop-bump {
   0% { transform: scale(1); }
   40% { transform: scale(1.18); }
   100% { transform: scale(1); }
+}
+
+/* Touch screens: a bigger hit area around the small round buttons, without changing how they look. */
+@media (pointer: coarse) {
+  .shop-chip,
+  .shop-back,
+  .shop-ghost {
+    min-height: 44px;
+  }
+
+  .fav::after,
+  .shop-add::after,
+  .shop-icon::after,
+  .shop-remove::after,
+  .tg-close::after {
+    content: "";
+    position: absolute;
+    inset: -8px;
+  }
+
+  .shop-remove,
+  .tg-close {
+    position: relative;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

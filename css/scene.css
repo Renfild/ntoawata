@@ -43,6 +43,8 @@ body.has-world .vignette {
   overflow: hidden;
 }
 
+/* The plane is 1120 CSS px wide but lands at under half that on screen, so the terminal is scaled
+   as a whole (rem and ch sizes included) instead of enlarging the monitor or the plane. */
 #crt.is-crt .app {
   position: absolute;
   inset: 0;
@@ -51,8 +53,10 @@ body.has-world .vignette {
   top: 0;
   right: 0;
   left: 0;
+  zoom: 1.3;
 }
 
+#crt.is-crt .scan,
 #crt.is-crt .glare {
   display: block;
 }
@@ -96,12 +100,8 @@ body.has-world:not(.has-crt) .app {
   transition: top 0.35s ease, height 0.35s ease;
 }
 
-body.has-world.dock-low:not(.has-crt) .output {
-  display: none;
-}
-
 body.has-world:not(.has-crt) .corner {
-  left: calc(12px + env(safe-area-inset-left));
+  left: calc(1rem + env(safe-area-inset-left));
   right: auto;
 }
 
@@ -110,11 +110,11 @@ body.has-world:not(.has-crt) .corner {
   margin-left: auto;
   padding: 0.25rem 0.7rem;
   min-height: 34px;
-  border: 1px solid #314033;
+  border: 1px solid #4a6b51;
   border-radius: 999px;
   background: transparent;
   color: var(--dim);
-  font: 0.8rem var(--font);
+  font: 0.85rem var(--font);
   cursor: pointer;
 }
 
@@ -191,7 +191,7 @@ body.has-world .corner {
   gap: 0.4rem;
   min-height: 40px;
   padding: 0.35rem 0.8rem;
-  border: 1px solid #314033;
+  border: 1px solid #4a6b51;
   border-radius: 999px;
   background: rgba(4, 8, 10, 0.72);
   color: var(--dim);
@@ -245,6 +245,7 @@ body.has-crt .zoom-toggle {
 
 #crt.is-crt .boot {
   position: absolute;
+  zoom: 1.3;
 }
 
 .boot.is-done {
@@ -342,11 +343,11 @@ body.has-crt .zoom-toggle {
   left: 0;
   z-index: 12;
   padding: 0.3rem 0.6rem;
-  border: 1px solid #314033;
+  border: 1px solid #4a6b51;
   border-radius: 8px;
   background: rgba(4, 8, 10, 0.85);
   color: var(--fg);
-  font: 0.8rem var(--font);
+  font: 0.875rem var(--font);
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
@@ -355,4 +356,34 @@ body.has-crt .zoom-toggle {
 
 .desk-tip.on {
   opacity: 1;
+}
+
+/* Touch screens: the dock and sound toggles are the main controls on a phone, so give them a full-size target. */
+@media (pointer: coarse) {
+  .dock-toggle,
+  .pill {
+    min-height: 44px;
+  }
+}
+
+/* Narrow phones: the header link must not wrap, and the "@github" suffix goes first when space runs out. */
+body.has-world:not(.has-crt) .top-inner a {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+@media (max-width: 359px) {
+  body.has-world:not(.has-crt) .brand .dim {
+    display: none;
+  }
+}
+
+/* Reduced motion: the dock slide, the boot fades and the matrix fade snap instead of animating. */
+@media (prefers-reduced-motion: reduce) {
+  body.has-world:not(.has-crt) .app,
+  .boot,
+  .boot-fill,
+  .matrix {
+    transition: none;
+  }
 }
